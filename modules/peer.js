@@ -10,6 +10,7 @@ import State from './state.js';
 import DB from './db.js';
 import Providers from './providers.js';
 import Bridge from './bridge.js';
+import Media from './media.js';
 
 console.log('[gridlock] peer.js loaded');
 
@@ -254,6 +255,33 @@ function wireCallbacks() {
     UI.appendSystemMsg('bridge disconnected');
     UI.setBridgeStatus(false);
   };
+
+  // Media grid — share URLs with the room
+  UI._onMediaAdd = (url) => {
+    const item = Media.add(url, ME.name);
+    if (item) {
+      console.log('[gridlock] sharing media:', item.type, url.slice(0, 60));
+      // Broadcast to all peers
+      const data = JSON.stringify({ type: 'media_add', item });
+      connections.forEach(({ conn }) => {
+        if (conn.open) conn.send(data);
+      });
+      UI.appendSystemMsg(`shared: ${item.type} — ${url.slice(0, 50)}`);
+    } else {
+      UI.appendSystemMsg('invalid URL');
+    }
+  };
+
+  UI._onMediaRemove = (id) => {
+    Media.remove(id);
+    const data = JSON.stringify({ type: 'media_remove', id });
+    connections.forEach(({ conn }) => {
+      if (conn.open) conn.send(data);
+    });
+  };
+
+  // Render media grid when items change
+  Media.onUpdate = (items) => UI.renderMediaGrid(items);
 }
 
 // --- Peer Discovery ---
@@ -401,6 +429,13 @@ function handleDataMessage(peerId, data) {
         }
         break;
       }
+      case 'media_add':
+        Media.onRemoteAdd(msg.item);
+        UI.appendSystemMsg(`${msg.item.addedBy} shared: ${msg.item.type}`);
+        break;
+      case 'media_remove':
+        Media.remove(msg.id);
+        break;
     }
   } catch (e) {
     // Non-JSON message, ignore
@@ -453,6 +488,7 @@ function cleanupRoom() {
   Camera.stop();
   Screen.stop();
   Bridge.stop();
+  Media.clear();
   Chat.history = [];
   Chat.channels.clear();
   State.channels.clear();

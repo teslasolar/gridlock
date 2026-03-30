@@ -90,12 +90,31 @@
 
         <!-- MAIN VIEW -->
         <main id="main-view">
-          <div id="screen-view" hidden>
+          <div id="view-tabs">
+            <button class="view-tab active" data-view="media">GRID</button>
+            <button class="view-tab" data-view="cameras">CAMS</button>
+            <button class="view-tab" data-view="screen">SCREEN</button>
+          </div>
+
+          <!-- MEDIA GRID (default view) -->
+          <div id="media-view" class="view-panel active">
+            <div id="media-grid"></div>
+            <div id="media-bar">
+              <input type="text" id="media-input" placeholder="paste URL — youtube, image, any link..." autocomplete="off" />
+              <button id="btn-media-add">SHARE</button>
+            </div>
+          </div>
+
+          <!-- CAMERAS -->
+          <div id="cameras-view" class="view-panel">
+            <div id="camera-grid"></div>
+          </div>
+
+          <!-- SCREEN SHARE -->
+          <div id="screen-view" class="view-panel">
             <video id="screen-video" autoplay playsinline></video>
             <div id="screen-label"></div>
-          </div>
-          <div id="gallery-view">
-            <div id="camera-grid"></div>
+            <div id="no-screen-msg">no one is sharing their screen</div>
           </div>
         </main>
 

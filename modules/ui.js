@@ -6,6 +6,7 @@ import Screen from './screen.js';
 import LLM from './llm.js';
 import DB from './db.js';
 import Providers from './providers.js';
+import Media from './media.js';
 
 console.log('[gridlock] ui.js loaded');
 
@@ -49,6 +50,12 @@ const UI = {
       llmInputArea: document.getElementById('llm-input-area'),
       llmInput: document.getElementById('llm-input'),
       btnLlmAsk: document.getElementById('btn-llm-ask'),
+      viewTabs: document.querySelectorAll('.view-tab'),
+      viewPanels: document.querySelectorAll('.view-panel'),
+      mediaGrid: document.getElementById('media-grid'),
+      mediaInput: document.getElementById('media-input'),
+      btnMediaAdd: document.getElementById('btn-media-add'),
+      noScreenMsg: document.getElementById('no-screen-msg'),
       bridgeStatus: document.getElementById('bridge-status'),
       bridgeRepo: document.getElementById('bridge-repo'),
       bridgeIssue: document.getElementById('bridge-issue'),
@@ -126,6 +133,42 @@ const UI = {
     });
     this.el.btnBridgeDisconnect.addEventListener('click', () => {
       if (this._onBridgeDisconnect) this._onBridgeDisconnect();
+    });
+
+    // View tabs (GRID / CAMS / SCREEN)
+    this.el.viewTabs.forEach(tab => {
+      tab.addEventListener('click', () => {
+        const view = tab.dataset.view;
+        this.el.viewTabs.forEach(t => t.classList.toggle('active', t === tab));
+        this.el.viewPanels.forEach(p => p.classList.toggle('active', p.id === `${view}-view` || p.id === `${view}s-view`));
+      });
+    });
+
+    // Media grid — share URL
+    this.el.btnMediaAdd.addEventListener('click', () => {
+      const url = this.el.mediaInput.value.trim();
+      if (url && this._onMediaAdd) {
+        this._onMediaAdd(url);
+        this.el.mediaInput.value = '';
+      }
+    });
+    this.el.mediaInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        this.el.btnMediaAdd.click();
+      }
+    });
+    // Also detect URLs pasted into chat
+    this.el.mediaInput.addEventListener('paste', (e) => {
+      // Auto-submit after short delay so paste value is available
+      setTimeout(() => {
+        const val = this.el.mediaInput.value.trim();
+        if (val && (val.startsWith('http://') || val.startsWith('https://'))) {
+          // Don't auto-submit, just highlight the SHARE button
+          this.el.btnMediaAdd.style.background = 'var(--green)';
+          setTimeout(() => { this.el.btnMediaAdd.style.background = ''; }, 1500);
+        }
+      }, 100);
     });
 
     this.el.btnLlmLoad.addEventListener('click', () => this._loadLLM());
@@ -231,7 +274,29 @@ const UI = {
     div.className = msg.bridge ? 'chat-msg bridge' : 'chat-msg';
     const time = new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     const prefix = msg.bridge ? '[gh] ' : '';
-    div.innerHTML = `${prefix}<span class="name">${this._esc(msg.name)}</span>: <span class="text">${this._esc(msg.text)}</span><span class="time">${time}</span>`;
+
+    // Linkify URLs in text
+    const escaped = this._esc(msg.text);
+    const linked = escaped.replace(/(https?:\/\/[^\s<]+)/g, (url) => {
+      return `<a href="${url}" target="_blank" rel="noopener" class="chat-link">${url}</a>`;
+    });
+
+    div.innerHTML = `${prefix}<span class="name">${this._esc(msg.name)}</span>: <span class="text">${linked}</span><span class="time">${time}</span>`;
+
+    // If message contains a URL, add a "pin to grid" button
+    const urlMatch = msg.text.match(/(https?:\/\/[^\s]+)/);
+    if (urlMatch) {
+      const pin = document.createElement('button');
+      pin.className = 'chat-pin';
+      pin.textContent = '[+grid]';
+      pin.title = 'Add to media grid';
+      pin.addEventListener('click', () => {
+        if (this._onMediaAdd) this._onMediaAdd(urlMatch[1]);
+        pin.remove();
+      });
+      div.appendChild(pin);
+    }
+
     this.el.chatMessages.appendChild(div);
     this.el.chatMessages.scrollTop = this.el.chatMessages.scrollHeight;
   },
@@ -260,19 +325,38 @@ const UI = {
     this.el.bridgeConfigArea.hidden = active;
   },
 
+  // Media grid rendering
+  renderMediaGrid(items) {
+    this.el.mediaGrid.innerHTML = '';
+    items.forEach(item => {
+      const cell = Media.render(item);
+      // Wire close button
+      cell.querySelector('.media-close').addEventListener('click', () => {
+        if (this._onMediaRemove) this._onMediaRemove(item.id);
+      });
+      this.el.mediaGrid.appendChild(cell);
+    });
+  },
+
   showScreen(peerId, stream) {
-    this.el.screenView.hidden = false;
-    this.el.galleryView.hidden = true;
+    // Switch to screen tab
+    this.el.viewTabs.forEach(t => t.classList.toggle('active', t.dataset.view === 'screen'));
+    this.el.viewPanels.forEach(p => p.classList.toggle('active', p.id === 'screen-view'));
     this.el.screenVideo.srcObject = stream;
+    this.el.screenVideo.hidden = false;
+    this.el.noScreenMsg.hidden = true;
     const peer = this.peers.get(peerId);
     this.el.screenLabel.textContent = `${peer?.name || peerId}'s screen`;
   },
 
   hideScreen() {
-    this.el.screenView.hidden = true;
-    this.el.galleryView.hidden = false;
     this.el.screenVideo.srcObject = null;
+    this.el.screenVideo.hidden = true;
+    this.el.noScreenMsg.hidden = false;
     this.el.screenLabel.textContent = '';
+    // Switch back to grid tab
+    this.el.viewTabs.forEach(t => t.classList.toggle('active', t.dataset.view === 'media'));
+    this.el.viewPanels.forEach(p => p.classList.toggle('active', p.id === 'media-view'));
   },
 
   addCameraStream(peerId, stream, name) {
@@ -342,6 +426,8 @@ const UI = {
   _onProviderDisconnect: null,
   _onBridgeConnect: null,
   _onBridgeDisconnect: null,
+  _onMediaAdd: null,
+  _onMediaRemove: null,
 };
 
 export default UI;

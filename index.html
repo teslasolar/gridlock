@@ -10,8 +10,8 @@
 </head>
 <body>
   <div id="app">
-    <!-- JOIN SCREEN (only shown if no saved name) -->
-    <div id="join-screen" hidden>
+    <!-- JOIN SCREEN — visible by default, hidden by JS on auto-join -->
+    <div id="join-screen">
       <h1>GRIDLOCK</h1>
       <p class="subtitle">P2P Everything. Zero Servers. Zero Cost.</p>
       <div class="join-form">
@@ -25,6 +25,7 @@
     <div id="main-ui" hidden>
       <header>
         <span id="room-label">GRIDLOCK</span>
+        <span id="name-label" title="you"></span>
         <span id="peer-count">0 peers</span>
         <div id="room-switcher">
           <input type="text" id="input-room" placeholder="room name..." autocomplete="off" />
@@ -101,16 +102,7 @@
     </div>
   </div>
 
-  <script type="module" src="modules/db.js"></script>
-  <script type="module" src="modules/providers.js"></script>
-  <script type="module" src="modules/state.js"></script>
-  <script type="module" src="modules/voice.js"></script>
-  <script type="module" src="modules/camera.js"></script>
-  <script type="module" src="modules/screen.js"></script>
-  <script type="module" src="modules/chat.js"></script>
-  <script type="module" src="modules/files.js"></script>
-  <script type="module" src="modules/llm.js"></script>
-  <script type="module" src="modules/ui.js"></script>
+  <!-- Single entry point — peer.js imports all other modules -->
   <script type="module" src="modules/peer.js"></script>
 </body>
 </html>

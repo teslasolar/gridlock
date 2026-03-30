@@ -74,6 +74,7 @@ header {
   border-bottom: 1px solid var(--border);
 }
 #room-label { font-weight: bold; color: var(--accent); }
+#name-label { color: var(--green); font-size: 0.8rem; font-weight: bold; }
 #peer-count { color: var(--dim); font-size: 0.85rem; }
 #room-switcher { display: flex; gap: 4px; flex: 1; justify-content: flex-end; margin-right: 0.5rem; }
 #room-switcher input {

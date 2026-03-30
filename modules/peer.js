@@ -10,8 +10,14 @@ import State from './state.js';
 import DB from './db.js';
 import Providers from './providers.js';
 
+console.log('[gridlock] peer.js loaded');
+
+const GLOBAL_ROOM = 'lobby';
 const ME = { id: null, name: null, room: null, peer: null };
-const connections = new Map(); // peerId → { pc, dataChannel }
+const connections = new Map();
+const knownPeers = new Map();
+
+// --- Utilities ---
 
 async function hashRoom(room) {
   const buf = new TextEncoder().encode(room);
@@ -19,49 +25,64 @@ async function hashRoom(room) {
   return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 16);
 }
 
-function generatePeerId(name, room) {
-  // Deterministic-ish but with random suffix to allow multiple tabs
-  const base = `gl-${room.slice(0, 6)}-${name.slice(0, 6)}`;
+function generatePeerId(name, roomHash) {
+  const base = `gl-${roomHash.slice(0, 6)}-${name.slice(0, 6)}`;
   const rand = Math.random().toString(36).slice(2, 6);
   return `${base}-${rand}`;
 }
 
+function generateAnonName() {
+  const adj = ['swift','bright','calm','dark','keen','bold','warm','cool','wild','free'];
+  const noun = ['fox','owl','elk','ray','bee','ant','cat','bat','jay','ram'];
+  return adj[Math.floor(Math.random() * adj.length)] + '-' + noun[Math.floor(Math.random() * noun.length)] + '-' + Math.floor(Math.random() * 100);
+}
+
+// --- Join Room ---
+
 async function join(name, room) {
+  console.log('[gridlock] join() called, name:', name, 'room:', room);
+
   ME.name = name;
   ME.room = room;
 
-  await DB.init();
+  try {
+    await DB.init();
+    console.log('[gridlock] DB initialized');
+  } catch (e) {
+    console.warn('[gridlock] DB init failed (non-fatal):', e.message);
+  }
+
   Files.init();
 
   const roomHash = await hashRoom(room);
   ME.id = generatePeerId(name, roomHash);
+  console.log('[gridlock] generated peerId:', ME.id);
+
+  // Show main UI immediately (don't wait for PeerJS)
+  UI.showMain(room, name);
+  UI.appendSystemMsg(`joining ${room} as ${name}...`);
+
+  // Wire up UI callbacks right away so chat/buttons work
+  wireCallbacks();
 
   // Connect to PeerJS signaling
-  ME.peer = new Peer(ME.id, {
-    debug: 0,
-  });
+  console.log('[gridlock] connecting to PeerJS...');
+  ME.peer = new Peer(ME.id, { debug: 0 });
 
   ME.peer.on('open', (id) => {
     ME.id = id;
-    UI.showMain(room);
-    UI.appendSystemMsg(`connected as ${name} (${id.slice(0, 12)}...)`);
-
-    // Announce to room via PeerJS discovery
-    // We use a room-specific "lobby" peer to discover others
+    console.log('[gridlock] PeerJS open, id:', id);
+    UI.appendSystemMsg(`connected (${id.slice(0, 12)}...)`);
     discoverPeers(roomHash);
   });
 
   ME.peer.on('connection', (conn) => {
+    console.log('[gridlock] incoming connection from:', conn.peer);
     handleIncomingConnection(conn);
   });
 
   ME.peer.on('call', (call) => {
-    // Answer with our streams
-    const streams = [];
-    if (Voice.stream) streams.push(Voice.stream);
-    if (Camera.stream) streams.push(Camera.stream);
-    if (Screen.stream) streams.push(Screen.stream);
-
+    console.log('[gridlock] incoming call from:', call.peer);
     call.answer(Voice.stream || new MediaStream());
     call.on('stream', (remoteStream) => {
       handleRemoteStream(call.peer, remoteStream);
@@ -69,11 +90,24 @@ async function join(name, room) {
   });
 
   ME.peer.on('error', (err) => {
-    UI.appendSystemMsg(`error: ${err.type}`);
+    console.error('[gridlock] PeerJS error:', err.type, err.message);
+    UI.appendSystemMsg(`peer error: ${err.type}`);
   });
 
-  // Wire up UI callbacks
+  ME.peer.on('disconnected', () => {
+    console.warn('[gridlock] PeerJS disconnected, attempting reconnect...');
+    UI.appendSystemMsg('disconnected, reconnecting...');
+    ME.peer.reconnect();
+  });
+}
+
+// --- Wire UI Callbacks ---
+
+function wireCallbacks() {
+  console.log('[gridlock] wiring callbacks');
+
   UI._onChatSend = (text) => {
+    console.log('[gridlock] sending chat:', text.slice(0, 30));
     Chat.send(text, ME.id, ME.name);
   };
 
@@ -83,6 +117,8 @@ async function join(name, room) {
     if (entry) {
       UI.updateFileList(Files.getIndex());
       UI.appendSystemMsg(`shared: ${file.name}`);
+      const p = Providers.get();
+      if (p?.ready) p.saveFile(ME.room, entry).catch(() => {});
     }
   };
 
@@ -102,7 +138,15 @@ async function join(name, room) {
     }
   };
 
-  // Mic button
+  // Chat message callback (both sent + received)
+  Chat.onMessageCallback = (msg) => {
+    UI.appendChat(msg);
+    DB.put('chatHistory', { ...msg, id: `${msg.timestamp}-${msg.from}` }).catch(() => {});
+    const p = Providers.get();
+    if (p?.ready) p.saveMessage(ME.room, msg).catch(() => {});
+  };
+
+  // Mic
   document.getElementById('btn-mic').onclick = async () => {
     if (!Voice.stream) {
       try {
@@ -110,30 +154,25 @@ async function join(name, room) {
         Voice.unmute();
         UI.setMicActive(true);
         UI.appendSystemMsg('mic on');
-        // Add audio to existing connections
-        connections.forEach(({ pc }) => Voice.attachToPeer(pc));
+        connections.forEach(({ conn }) => {
+          // Audio needs a media call, not data channel
+        });
       } catch (e) {
         UI.appendSystemMsg('mic access denied');
       }
     } else {
-      if (Voice.isMuted()) {
-        Voice.unmute();
-        UI.setMicActive(true);
-      } else {
-        Voice.mute();
-        UI.setMicActive(false);
-      }
+      if (Voice.isMuted()) { Voice.unmute(); UI.setMicActive(true); }
+      else { Voice.mute(); UI.setMicActive(false); }
     }
   };
 
-  // Camera button
+  // Camera
   document.getElementById('btn-cam').onclick = async () => {
     if (!Camera.stream) {
       try {
         await Camera.init();
         UI.setCamActive(true);
         UI.addCameraStream('local', Camera.stream, ME.name);
-        connections.forEach(({ pc }) => Camera.attachToPeer(pc));
       } catch (e) {
         UI.appendSystemMsg('camera access denied');
       }
@@ -143,14 +182,13 @@ async function join(name, room) {
     }
   };
 
-  // Screen share button
+  // Screen share
   document.getElementById('btn-screen').onclick = async () => {
     if (!Screen.isSharing()) {
       try {
         await Screen.share(ME.id);
         UI.setScreenActive(true);
         UI.appendSystemMsg('screen sharing started');
-        connections.forEach(({ pc }) => Screen.attachToPeer(pc));
       } catch (e) {
         UI.appendSystemMsg('screen share cancelled');
       }
@@ -162,33 +200,12 @@ async function join(name, room) {
     }
   };
 
-  // Chat message callback
-  Chat.onMessageCallback = (msg) => {
-    UI.appendChat(msg);
-    DB.put('chatHistory', { ...msg, id: `${msg.timestamp}-${msg.from}` }).catch(() => {});
-    // Persist to external provider if connected
-    const p = Providers.get();
-    if (p?.ready) p.saveMessage(ME.room, msg).catch(() => {});
-  };
-
-  // Provider-aware file share wrapper
-  const origFileShare = UI._onFileShare;
-  UI._onFileShare = async (file) => {
-    await origFileShare(file);
-    const p = Providers.get();
-    if (p?.ready) {
-      const latest = Files.getIndex().slice(-1)[0];
-      if (latest) p.saveFile(ME.room, latest).catch(() => {});
-    }
-  };
-
-  // Wire up provider connect UI
+  // Provider
   UI._onProviderConnect = async (providerName, config) => {
     try {
       await Providers.connect(providerName, config);
       UI.appendSystemMsg(`connected to ${providerName}`);
       UI.setProviderStatus(providerName, true);
-      // Sync: load history from provider
       const p = Providers.get();
       const msgs = await p.getMessages(ME.room, 100).catch(() => []);
       if (msgs?.length) {
@@ -200,7 +217,6 @@ async function join(name, room) {
         files.forEach(f => Files.onFileShared(f));
         UI.updateFileList(Files.getIndex());
       }
-      // Register presence
       p.savePeer(ME.room, { id: ME.id, name: ME.name }).catch(() => {});
     } catch (err) {
       UI.appendSystemMsg(`provider error: ${err.message}`);
@@ -216,21 +232,23 @@ async function join(name, room) {
   };
 }
 
-function discoverPeers(roomHash) {
-  // Use a lobby peer ID pattern to find room members
-  // Each peer registers with a known prefix
-  const lobbyId = `gl-lobby-${roomHash}`;
+// --- Peer Discovery ---
 
-  // Try connecting to the lobby coordinator
+function discoverPeers(roomHash) {
+  const lobbyId = `gl-lobby-${roomHash}`;
+  console.log('[gridlock] discovering peers, lobby:', lobbyId);
+
   const conn = ME.peer.connect(lobbyId, { metadata: { name: ME.name, room: roomHash } });
 
   conn.on('open', () => {
+    console.log('[gridlock] connected to lobby peer');
     conn.send(JSON.stringify({ type: 'announce', peerId: ME.id, name: ME.name }));
   });
 
   conn.on('data', (data) => {
     const msg = JSON.parse(data);
     if (msg.type === 'peers') {
+      console.log('[gridlock] received peer list:', msg.peers.length, 'peers');
       msg.peers.forEach(p => {
         if (p.peerId !== ME.id && !connections.has(p.peerId)) {
           connectToPeer(p.peerId, p.name);
@@ -240,15 +258,13 @@ function discoverPeers(roomHash) {
   });
 
   conn.on('error', () => {
-    // No lobby exists yet — we become the lobby
+    console.log('[gridlock] no lobby found, becoming lobby');
     becomeLobby(roomHash);
   });
 
-  // Also become lobby as backup (multiple lobbies merge)
+  // Also become lobby as backup
   setTimeout(() => becomeLobby(roomHash), 2000);
 }
-
-const knownPeers = new Map();
 
 function becomeLobby(roomHash) {
   knownPeers.set(ME.id, { peerId: ME.id, name: ME.name });
@@ -258,24 +274,25 @@ function becomeLobby(roomHash) {
       try {
         const msg = JSON.parse(data);
         if (msg.type === 'announce') {
+          console.log('[gridlock] lobby: peer announced:', msg.name);
           knownPeers.set(msg.peerId, { peerId: msg.peerId, name: msg.name });
-          // Send back known peers
           conn.send(JSON.stringify({ type: 'peers', peers: [...knownPeers.values()] }));
-          // Connect to this new peer
           if (msg.peerId !== ME.id && !connections.has(msg.peerId)) {
             connectToPeer(msg.peerId, msg.name);
           }
         }
       } catch (e) {
-        // Not a lobby message, handle as data channel
         handleDataMessage(conn.peer, data);
       }
     });
   });
 }
 
+// --- Peer Connections ---
+
 function connectToPeer(peerId, name) {
   if (connections.has(peerId)) return;
+  console.log('[gridlock] connecting to peer:', name, peerId);
 
   const conn = ME.peer.connect(peerId, {
     metadata: { name: ME.name, room: ME.room },
@@ -283,12 +300,10 @@ function connectToPeer(peerId, name) {
   });
 
   conn.on('open', () => {
+    console.log('[gridlock] data channel open to:', name);
     setupDataConnection(peerId, conn, name);
-
-    // Send announce
     conn.send(JSON.stringify({ type: 'announce', peerId: ME.id, name: ME.name }));
 
-    // Call with media
     if (Voice.stream || Camera.stream) {
       const stream = new MediaStream();
       if (Voice.stream) Voice.stream.getTracks().forEach(t => stream.addTrack(t));
@@ -299,13 +314,14 @@ function connectToPeer(peerId, name) {
   });
 
   conn.on('error', (err) => {
-    console.warn(`Connection to ${peerId} failed:`, err);
+    console.warn('[gridlock] connection to', peerId, 'failed:', err);
   });
 }
 
 function handleIncomingConnection(conn) {
   conn.on('open', () => {
     const name = conn.metadata?.name || conn.peer.slice(0, 12);
+    console.log('[gridlock] incoming data channel from:', name);
     setupDataConnection(conn.peer, conn, name);
     conn.send(JSON.stringify({ type: 'announce', peerId: ME.id, name: ME.name }));
   });
@@ -313,22 +329,20 @@ function handleIncomingConnection(conn) {
 
 function setupDataConnection(peerId, conn, name) {
   connections.set(peerId, { conn, name });
-
   UI.addPeer(peerId, name || peerId);
   UI.appendSystemMsg(`${name || peerId} joined`);
-
   Chat.registerChannel(peerId, conn);
   State.registerChannel(peerId, conn);
-
   conn.on('data', (data) => handleDataMessage(peerId, data));
   conn.on('close', () => handlePeerLeave(peerId));
   conn.on('error', () => handlePeerLeave(peerId));
 }
 
+// --- Data Messages ---
+
 function handleDataMessage(peerId, data) {
   try {
     const msg = typeof data === 'string' ? JSON.parse(data) : data;
-
     switch (msg.type) {
       case 'chat':
         Chat.history.push(msg.msg);
@@ -345,7 +359,7 @@ function handleDataMessage(peerId, data) {
       case 'screen_start': {
         const peer = UI.peers.get(msg.peerId);
         if (peer) peer.sharing = true;
-        UI._renderPeers?.();
+        UI._renderPeers();
         break;
       }
       case 'screen_stop':
@@ -365,9 +379,11 @@ function handleDataMessage(peerId, data) {
       }
     }
   } catch (e) {
-    // Ignore non-JSON messages
+    // Non-JSON message, ignore
   }
 }
+
+// --- Media Streams ---
 
 function handleRemoteStream(peerId, stream) {
   const audioTracks = stream.getAudioTracks();
@@ -375,14 +391,11 @@ function handleRemoteStream(peerId, stream) {
 
   if (audioTracks.length > 0) {
     Voice.onRemoteStream(peerId, stream);
-    Voice.detectSpeaking(stream, (speaking) => {
-      UI.setSpeaking(peerId, speaking);
-    });
+    Voice.detectSpeaking(stream, (speaking) => UI.setSpeaking(peerId, speaking));
   }
 
   if (videoTracks.length > 0) {
     const name = connections.get(peerId)?.name || peerId;
-    // Check if it's a screen share (usually higher resolution)
     const settings = videoTracks[0].getSettings();
     if (settings.width > 640 || settings.displaySurface) {
       Screen.onRemoteScreen(peerId, stream);
@@ -392,6 +405,8 @@ function handleRemoteStream(peerId, stream) {
     }
   }
 }
+
+// --- Leave / Switch ---
 
 function handlePeerLeave(peerId) {
   const info = connections.get(peerId);
@@ -406,28 +421,7 @@ function handlePeerLeave(peerId) {
   UI.appendSystemMsg(`${name} left`);
 }
 
-function leave() {
-  connections.forEach(({ conn }) => conn.close());
-  connections.clear();
-  knownPeers.clear();
-  Voice.stop();
-  Camera.stop();
-  Screen.stop();
-  ME.peer?.destroy();
-  ME.peer = null;
-  UI.showJoin();
-}
-
-const GLOBAL_ROOM = 'lobby';
-
-function generateAnonName() {
-  const adj = ['swift','bright','calm','dark','keen','bold','warm','cool','wild','free'];
-  const noun = ['fox','owl','elk','ray','bee','ant','cat','bat','jay','ram'];
-  return adj[Math.floor(Math.random()*adj.length)] + '-' + noun[Math.floor(Math.random()*noun.length)] + '-' + Math.floor(Math.random()*100);
-}
-
-async function switchRoom(newRoom) {
-  // Leave current room cleanly
+function cleanupRoom() {
   connections.forEach(({ conn }) => conn.close());
   connections.clear();
   knownPeers.clear();
@@ -441,6 +435,11 @@ async function switchRoom(newRoom) {
   State.vector = {};
   ME.peer?.destroy();
   ME.peer = null;
+}
+
+async function switchRoom(newRoom) {
+  console.log('[gridlock] switching room to:', newRoom);
+  cleanupRoom();
 
   UI.peers.clear();
   document.getElementById('peers-list').innerHTML = '';
@@ -452,43 +451,64 @@ async function switchRoom(newRoom) {
   UI.setScreenActive(false);
   UI.updatePeerCount();
 
-  // Join new room
   await join(ME.name, newRoom);
 }
 
-// Initialize UI and wire up
+// ============================================================
+// BOOT SEQUENCE
+// ============================================================
+
+console.log('[gridlock] booting...');
 UI.init();
 
-UI.onJoin = async (name, room) => {
+// Set up onJoin BEFORE checking saved name
+UI.onJoin = async (name) => {
+  console.log('[gridlock] onJoin fired, name:', name);
   localStorage.setItem('gridlock-name', name);
-  await join(name, room || GLOBAL_ROOM);
+  await join(name, GLOBAL_ROOM);
 };
 
 UI.onLeave = () => {
-  // Leave goes back to global lobby, not to join screen
+  console.log('[gridlock] onLeave → switching to lobby');
   switchRoom(GLOBAL_ROOM);
 };
 
-// Room switcher
-document.getElementById('btn-switch-room').onclick = () => {
-  const room = document.getElementById('input-room').value.trim();
-  if (room && room !== ME.room) {
-    switchRoom(room);
-    document.getElementById('input-room').value = '';
-  }
-};
-document.getElementById('input-room').onkeydown = (e) => {
-  if (e.key === 'Enter') document.getElementById('btn-switch-room').click();
-};
+// Room switcher in header
+const switchBtn = document.getElementById('btn-switch-room');
+const roomInput = document.getElementById('input-room');
 
-// Auto-join: if we have a saved name, skip join screen and go straight to lobby
+if (switchBtn && roomInput) {
+  switchBtn.addEventListener('click', () => {
+    const room = roomInput.value.trim();
+    console.log('[gridlock] switch room clicked, room:', room);
+    if (room && room !== ME.room) {
+      switchRoom(room);
+      roomInput.value = '';
+    }
+  });
+  roomInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      switchBtn.click();
+    }
+  });
+} else {
+  console.warn('[gridlock] room switcher elements not found');
+}
+
+// Auto-join or show name prompt
 const savedName = localStorage.getItem('gridlock-name');
+console.log('[gridlock] saved name:', savedName);
+
 if (savedName) {
-  // Auto-join global lobby
+  console.log('[gridlock] auto-joining lobby as:', savedName);
+  document.getElementById('join-screen').hidden = true;
   join(savedName, GLOBAL_ROOM);
 } else {
-  // Show name prompt
+  console.log('[gridlock] no saved name, showing join screen');
   document.getElementById('join-screen').hidden = false;
-  document.getElementById('input-name').value = generateAnonName();
-  document.getElementById('input-name').select();
+  const nameInput = document.getElementById('input-name');
+  nameInput.value = generateAnonName();
+  nameInput.select();
+  nameInput.focus();
 }

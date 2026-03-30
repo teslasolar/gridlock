@@ -7,14 +7,18 @@ import LLM from './llm.js';
 import DB from './db.js';
 import Providers from './providers.js';
 
+console.log('[gridlock] ui.js loaded');
+
 const UI = {
   peers: new Map(),
   onJoin: null,
   onLeave: null,
 
   init() {
+    console.log('[gridlock] UI.init()');
     this._cacheElements();
     this._bindEvents();
+    console.log('[gridlock] UI ready, elements cached, events bound');
   },
 
   _cacheElements() {
@@ -25,6 +29,7 @@ const UI = {
       btnJoin: document.getElementById('btn-join'),
       btnLeave: document.getElementById('btn-leave'),
       roomLabel: document.getElementById('room-label'),
+      nameLabel: document.getElementById('name-label'),
       peerCount: document.getElementById('peer-count'),
       peersList: document.getElementById('peers-list'),
       filesList: document.getElementById('files-list'),
@@ -51,38 +56,64 @@ const UI = {
       btnProviderConnect: document.getElementById('btn-provider-connect'),
       btnProviderDisconnect: document.getElementById('btn-provider-disconnect'),
     };
+    // Log any missing elements
+    for (const [k, v] of Object.entries(this.el)) {
+      if (!v) console.warn(`[gridlock] missing element: #${k}`);
+    }
   },
 
   _bindEvents() {
-    this.el.btnJoin.onclick = () => {
+    this.el.btnJoin.addEventListener('click', () => {
       const name = this.el.inputName.value.trim();
-      if (name && this.onJoin) this.onJoin(name);
-    };
-    this.el.inputName.onkeydown = (e) => {
-      if (e.key === 'Enter') this.el.btnJoin.click();
-    };
-    this.el.btnLeave.onclick = () => { if (this.onLeave) this.onLeave(); };
-
-    this.el.chatInput.onkeydown = (e) => {
-      if (e.key === 'Enter' && this.el.chatInput.value.trim()) {
-        this._onChatSend(this.el.chatInput.value.trim());
-        this.el.chatInput.value = '';
+      console.log('[gridlock] JOIN clicked, name:', name, 'onJoin:', !!this.onJoin);
+      if (name && this.onJoin) {
+        this.onJoin(name);
+      } else if (!name) {
+        console.warn('[gridlock] no name entered');
+      } else if (!this.onJoin) {
+        console.error('[gridlock] onJoin callback not set');
       }
-    };
+    });
 
-    this.el.fileInput.onchange = (e) => {
+    this.el.inputName.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        console.log('[gridlock] Enter pressed in name input');
+        e.preventDefault();
+        this.el.btnJoin.click();
+      }
+    });
+
+    this.el.btnLeave.addEventListener('click', () => {
+      console.log('[gridlock] LEAVE clicked');
+      if (this.onLeave) this.onLeave();
+    });
+
+    this.el.chatInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        const text = this.el.chatInput.value.trim();
+        if (text && this._onChatSend) {
+          console.log('[gridlock] chat send:', text.slice(0, 30));
+          this._onChatSend(text);
+          this.el.chatInput.value = '';
+        } else if (!this._onChatSend) {
+          console.warn('[gridlock] chat send callback not set yet');
+        }
+      }
+    });
+
+    this.el.fileInput.addEventListener('change', (e) => {
       const file = e.target.files[0];
       if (file && this._onFileShare) this._onFileShare(file);
-    };
+    });
 
-    this.el.btnLlmLoad.onclick = () => this._loadLLM();
-    this.el.btnLlmAsk.onclick = () => this._askLLM();
-    this.el.llmInput.onkeydown = (e) => {
+    this.el.btnLlmLoad.addEventListener('click', () => this._loadLLM());
+    this.el.btnLlmAsk.addEventListener('click', () => this._askLLM());
+    this.el.llmInput.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') this._askLLM();
-    };
+    });
 
     // Provider UI
-    this.el.providerSelect.onchange = () => {
+    this.el.providerSelect.addEventListener('change', () => {
       const val = this.el.providerSelect.value;
       this.el.providerConfigArea.hidden = !val;
       if (val) {
@@ -96,8 +127,8 @@ const UI = {
         };
         this.el.providerConfig.value = templates[val] || '{}';
       }
-    };
-    this.el.btnProviderConnect.onclick = () => {
+    });
+    this.el.btnProviderConnect.addEventListener('click', () => {
       const name = this.el.providerSelect.value;
       if (!name) return;
       try {
@@ -106,19 +137,24 @@ const UI = {
       } catch (e) {
         this.appendSystemMsg('invalid config JSON');
       }
-    };
-    this.el.btnProviderDisconnect.onclick = () => {
+    });
+    this.el.btnProviderDisconnect.addEventListener('click', () => {
       if (this._onProviderDisconnect) this._onProviderDisconnect();
-    };
+    });
   },
 
-  showMain(roomName) {
+  showMain(roomName, myName) {
+    console.log('[gridlock] showMain, room:', roomName, 'name:', myName);
     this.el.joinScreen.hidden = true;
     this.el.mainUI.hidden = false;
-    this.el.roomLabel.textContent = `GRIDLOCK - ${roomName}`;
+    this.el.roomLabel.textContent = `GRIDLOCK — ${roomName}`;
+    if (myName && this.el.nameLabel) {
+      this.el.nameLabel.textContent = myName;
+    }
   },
 
   showJoin() {
+    console.log('[gridlock] showJoin');
     this.el.joinScreen.hidden = false;
     this.el.mainUI.hidden = true;
     this.peers.clear();
@@ -150,8 +186,7 @@ const UI = {
       li.appendChild(dot);
       li.appendChild(document.createTextNode(` ${info.name}`));
       if (info.sharing) {
-        const badge = document.createTextNode(' [scr]');
-        li.appendChild(badge);
+        li.appendChild(document.createTextNode(' [scr]'));
       }
       this.el.peersList.appendChild(li);
     });
@@ -179,6 +214,7 @@ const UI = {
   },
 
   appendSystemMsg(text) {
+    console.log('[gridlock]', text);
     const div = document.createElement('div');
     div.className = 'chat-msg system';
     div.textContent = text;
@@ -191,8 +227,7 @@ const UI = {
     this.el.providerStatus.className = connected ? 'connected' : '';
     this.el.btnProviderDisconnect.hidden = !connected;
     this.el.providerConfigArea.hidden = connected;
-    if (connected) this.el.providerSelect.disabled = true;
-    else this.el.providerSelect.disabled = false;
+    this.el.providerSelect.disabled = connected;
   },
 
   showScreen(peerId, stream) {
@@ -234,17 +269,9 @@ const UI = {
     });
   },
 
-  setMicActive(active) {
-    this.el.btnMic.classList.toggle('active', active);
-  },
-
-  setCamActive(active) {
-    this.el.btnCam.classList.toggle('active', active);
-  },
-
-  setScreenActive(active) {
-    this.el.btnScreen.classList.toggle('active', active);
-  },
+  setMicActive(active) { this.el.btnMic.classList.toggle('active', active); },
+  setCamActive(active) { this.el.btnCam.classList.toggle('active', active); },
+  setScreenActive(active) { this.el.btnScreen.classList.toggle('active', active); },
 
   async _loadLLM() {
     this.el.llmStatus.textContent = 'loading model...';
@@ -277,7 +304,7 @@ const UI = {
     return d.innerHTML;
   },
 
-  // Callbacks set by peer.js
+  // Callbacks — set by peer.js during join()
   _onChatSend: null,
   _onFileShare: null,
   _onFileDownload: null,

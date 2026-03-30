@@ -1,0 +1,12 @@
+{
+  "name": "gridlock-cli",
+  "version": "1.0.0",
+  "description": "GRIDLOCK CLI — terminal node in the P2P mesh",
+  "main": "gridlock.js",
+  "bin": {
+    "gridlock": "./gridlock.js"
+  },
+  "dependencies": {
+    "peerjs": "^1.5.4"
+  }
+}

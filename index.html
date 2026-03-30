@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GRIDLOCK — P2P Everything</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/webtorrent@2.5.1/webtorrent.min.js"></script>
+</head>
+<body>
+  <div id="app">
+    <!-- JOIN SCREEN -->
+    <div id="join-screen">
+      <h1>GRIDLOCK</h1>
+      <p class="subtitle">P2P Everything. Zero Servers. Zero Cost.</p>
+      <div class="join-form">
+        <input type="text" id="input-name" placeholder="your name" autocomplete="off" />
+        <input type="text" id="input-room" placeholder="room name" autocomplete="off" />
+        <button id="btn-join">JOIN ROOM</button>
+      </div>
+      <p class="hint">room name is the password. share it only with your people.</p>
+    </div>
+
+    <!-- MAIN UI (hidden until joined) -->
+    <div id="main-ui" hidden>
+      <header>
+        <span id="room-label">GRIDLOCK</span>
+        <span id="peer-count">0 peers</span>
+        <button id="btn-leave" title="Leave room">LEAVE</button>
+      </header>
+      <div id="layout">
+        <!-- SIDEBAR -->
+        <aside id="sidebar">
+          <section id="peers-panel">
+            <h3>PEERS</h3>
+            <ul id="peers-list"></ul>
+          </section>
+          <section id="files-panel">
+            <h3>FILES</h3>
+            <ul id="files-list"></ul>
+            <label class="file-share-btn">
+              [share file]
+              <input type="file" id="file-input" hidden />
+            </label>
+          </section>
+          <section id="llm-panel">
+            <h3>LLM</h3>
+            <div id="llm-status">not loaded</div>
+            <button id="btn-llm-load">Load AI</button>
+            <div id="llm-input-area" hidden>
+              <input type="text" id="llm-input" placeholder="ask AI..." />
+              <button id="btn-llm-ask">ask</button>
+            </div>
+          </section>
+        </aside>
+
+        <!-- MAIN VIEW -->
+        <main id="main-view">
+          <div id="screen-view" hidden>
+            <video id="screen-video" autoplay playsinline></video>
+            <div id="screen-label"></div>
+          </div>
+          <div id="gallery-view">
+            <div id="camera-grid"></div>
+          </div>
+        </main>
+
+        <!-- CHAT -->
+        <div id="chat-panel">
+          <div id="chat-messages"></div>
+          <div id="chat-input-bar">
+            <input type="text" id="chat-input" placeholder="type message..." />
+            <button id="btn-mic" title="Toggle mic">MIC</button>
+            <button id="btn-cam" title="Toggle camera">CAM</button>
+            <button id="btn-screen" title="Share screen">SCR</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="modules/db.js"></script>
+  <script type="module" src="modules/state.js"></script>
+  <script type="module" src="modules/voice.js"></script>
+  <script type="module" src="modules/camera.js"></script>
+  <script type="module" src="modules/screen.js"></script>
+  <script type="module" src="modules/chat.js"></script>
+  <script type="module" src="modules/files.js"></script>
+  <script type="module" src="modules/llm.js"></script>
+  <script type="module" src="modules/ui.js"></script>
+  <script type="module" src="modules/peer.js"></script>
+</body>
+</html>

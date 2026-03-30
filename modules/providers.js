@@ -320,8 +320,6 @@ class CustomProvider extends BaseProvider {
   constructor() { super('custom'); }
 
   async init(config) {
-    // config: whatever your backend needs
-    // Connect to your database / API / service here
     this.config = config;
     this.ready = true;
   }
@@ -338,6 +336,455 @@ class CustomProvider extends BaseProvider {
   async destroy() { this.ready = false; }
 }
 
+// --- MQTT Provider (IoT / Industrial / Message Broker) ---
+// Connects to any MQTT broker (Mosquitto, HiveMQ, EMQX, AWS IoT, etc.)
+// Topics: gridlock/{room}/messages, /files, /state/{key}, /peers
+class MQTTProvider extends BaseProvider {
+  constructor() { super('mqtt'); }
+
+  async init(config) {
+    // config: { brokerUrl, username?, password?, clientId?, qos? }
+    // Uses MQTT.js from CDN (browser-compatible via WebSocket)
+    const mqtt = await import('https://esm.run/mqtt');
+    this.qos = config.qos ?? 1;
+    this.prefix = config.prefix || 'gridlock';
+    this.messages = [];
+    this.files = [];
+    this.stateCache = {};
+    this.peersCache = [];
+
+    const opts = {};
+    if (config.username) opts.username = config.username;
+    if (config.password) opts.password = config.password;
+    if (config.clientId) opts.clientId = config.clientId;
+    else opts.clientId = `gridlock-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+
+    return new Promise((resolve, reject) => {
+      this.client = mqtt.connect(config.brokerUrl, opts);
+      this.client.on('connect', () => {
+        this.ready = true;
+        resolve();
+      });
+      this.client.on('error', (e) => reject(e));
+      this.client.on('message', (topic, payload) => {
+        this._onMessage(topic, JSON.parse(payload.toString()));
+      });
+    });
+  }
+
+  _topic(room, sub) { return `${this.prefix}/${room}/${sub}`; }
+
+  _subscribe(room) {
+    ['messages', 'files', 'state/+', 'peers'].forEach(sub => {
+      this.client.subscribe(this._topic(room, sub), { qos: this.qos });
+    });
+  }
+
+  _onMessage(topic, data) {
+    const parts = topic.split('/');
+    const sub = parts.slice(2).join('/');
+    if (sub === 'messages') this.messages.push(data);
+    else if (sub === 'files') this.files.push(data);
+    else if (sub.startsWith('state/')) this.stateCache[parts[3]] = data;
+    else if (sub === 'peers') this.peersCache.push(data);
+  }
+
+  async saveMessage(room, msg) {
+    this._subscribe(room);
+    this.client.publish(this._topic(room, 'messages'), JSON.stringify(msg), { qos: this.qos });
+  }
+
+  async getMessages(room, n = 50) {
+    this._subscribe(room);
+    return this.messages.slice(-n);
+  }
+
+  async saveFile(room, entry) {
+    this.client.publish(this._topic(room, 'files'), JSON.stringify(entry), { qos: this.qos, retain: true });
+  }
+
+  async getFiles(room) { return [...this.files]; }
+
+  async saveState(room, key, value) {
+    this.client.publish(this._topic(room, `state/${key}`), JSON.stringify(value), { qos: this.qos, retain: true });
+  }
+
+  async getState(room, key) { return this.stateCache[key] ?? null; }
+  async getFullState(room) { return { ...this.stateCache }; }
+
+  async savePeer(room, peer) {
+    this.client.publish(this._topic(room, 'peers'), JSON.stringify(peer), { qos: this.qos });
+  }
+
+  async getPeers(room) { return [...this.peersCache]; }
+
+  async destroy() {
+    this.client?.end();
+    this.ready = false;
+  }
+}
+
+// --- OPC-UA Provider (Industrial Automation / SCADA) ---
+// Connects to OPC-UA servers via a REST gateway (e.g., node-opcua-webapi, Prosys, Unified Automation)
+// Maps GRIDLOCK data to OPC-UA nodes: Objects/Gridlock/{Room}/Messages, Files, State, Peers
+class OPCUAProvider extends BaseProvider {
+  constructor() { super('opcua'); }
+
+  async init(config) {
+    // config: { gatewayUrl, endpointUrl?, username?, password?, namespace? }
+    // gatewayUrl: HTTP REST bridge to OPC-UA server
+    this.gateway = config.gatewayUrl.replace(/\/$/, '');
+    this.namespace = config.namespace || 'gridlock';
+    this.headers = { 'Content-Type': 'application/json' };
+    if (config.username && config.password) {
+      this.headers['Authorization'] = 'Basic ' + btoa(`${config.username}:${config.password}`);
+    }
+    // Test connection
+    const res = await fetch(`${this.gateway}/status`, { headers: this.headers });
+    if (!res.ok) throw new Error(`OPC-UA gateway returned ${res.status}`);
+    this.ready = true;
+  }
+
+  _nodePath(room, sub) {
+    return `Objects/${this.namespace}/${encodeURIComponent(room)}/${sub}`;
+  }
+
+  async _read(room, sub) {
+    const res = await fetch(`${this.gateway}/read/${this._nodePath(room, sub)}`, {
+      headers: this.headers
+    });
+    if (!res.ok) return null;
+    return res.json();
+  }
+
+  async _write(room, sub, value) {
+    await fetch(`${this.gateway}/write/${this._nodePath(room, sub)}`, {
+      method: 'POST', headers: this.headers,
+      body: JSON.stringify({ value })
+    });
+  }
+
+  async saveMessage(room, msg) { return this._write(room, 'Messages', msg); }
+  async getMessages(room, n = 50) { return (await this._read(room, 'Messages')) || []; }
+  async saveFile(room, entry) { return this._write(room, 'Files', entry); }
+  async getFiles(room) { return (await this._read(room, 'Files')) || []; }
+  async saveState(room, key, value) { return this._write(room, `State/${key}`, value); }
+  async getState(room, key) { return this._read(room, `State/${key}`); }
+  async getFullState(room) { return (await this._read(room, 'State')) || {}; }
+  async savePeer(room, peer) { return this._write(room, 'Peers', peer); }
+  async getPeers(room) { return (await this._read(room, 'Peers')) || []; }
+  async destroy() { this.ready = false; }
+}
+
+// --- AMQP Provider (RabbitMQ / Message Queues) ---
+// Connects via RabbitMQ Management HTTP API or any AMQP-over-HTTP bridge.
+// Exchanges: gridlock.{room}, queues: messages, files, state, peers
+class AMQPProvider extends BaseProvider {
+  constructor() { super('amqp'); }
+
+  async init(config) {
+    // config: { managementUrl, username, password, vhost? }
+    // managementUrl: RabbitMQ HTTP API (e.g., http://localhost:15672/api)
+    this.base = config.managementUrl.replace(/\/$/, '');
+    this.vhost = encodeURIComponent(config.vhost || '/');
+    this.headers = {
+      'Content-Type': 'application/json',
+      'Authorization': 'Basic ' + btoa(`${config.username}:${config.password}`)
+    };
+    // Test connection
+    const res = await fetch(`${this.base}/overview`, { headers: this.headers });
+    if (!res.ok) throw new Error(`AMQP management returned ${res.status}`);
+    this.ready = true;
+  }
+
+  async _publish(room, routingKey, payload) {
+    await fetch(`${this.base}/exchanges/${this.vhost}/gridlock.${room}/publish`, {
+      method: 'POST', headers: this.headers,
+      body: JSON.stringify({
+        routing_key: routingKey,
+        payload: JSON.stringify(payload),
+        payload_encoding: 'string',
+        properties: { content_type: 'application/json' }
+      })
+    });
+  }
+
+  async _get(room, queue, count = 50) {
+    const res = await fetch(`${this.base}/queues/${this.vhost}/gridlock.${room}.${queue}/get`, {
+      method: 'POST', headers: this.headers,
+      body: JSON.stringify({ count, ackmode: 'ack_requeue_true', encoding: 'auto' })
+    });
+    if (!res.ok) return [];
+    const msgs = await res.json();
+    return msgs.map(m => { try { return JSON.parse(m.payload); } catch { return m.payload; } });
+  }
+
+  async saveMessage(room, msg) { return this._publish(room, 'messages', msg); }
+  async getMessages(room, n = 50) { return this._get(room, 'messages', n); }
+  async saveFile(room, entry) { return this._publish(room, 'files', entry); }
+  async getFiles(room) { return this._get(room, 'files'); }
+  async saveState(room, key, value) { return this._publish(room, `state.${key}`, { key, value }); }
+  async getState(room, key) { const msgs = await this._get(room, `state.${key}`, 1); return msgs[0]?.value ?? null; }
+  async getFullState(room) { const msgs = await this._get(room, 'state', 100); const s = {}; msgs.forEach(m => { if (m.key) s[m.key] = m.value; }); return s; }
+  async savePeer(room, peer) { return this._publish(room, 'peers', peer); }
+  async getPeers(room) { return this._get(room, 'peers'); }
+  async destroy() { this.ready = false; }
+}
+
+// --- GraphQL Provider (Any GraphQL Backend) ---
+// Works with Hasura, AppSync, custom GraphQL servers, etc.
+class GraphQLProvider extends BaseProvider {
+  constructor() { super('graphql'); }
+
+  async init(config) {
+    // config: { endpoint, headers?, wsEndpoint? }
+    this.endpoint = config.endpoint;
+    this.headers = { 'Content-Type': 'application/json', ...(config.headers || {}) };
+    // Test with introspection
+    const res = await this._query('{ __typename }');
+    if (!res) throw new Error('GraphQL endpoint unreachable');
+    this.ready = true;
+  }
+
+  async _query(query, variables = {}) {
+    const res = await fetch(this.endpoint, {
+      method: 'POST', headers: this.headers,
+      body: JSON.stringify({ query, variables })
+    });
+    if (!res.ok) return null;
+    const json = await res.json();
+    return json.data;
+  }
+
+  async _mutate(mutation, variables = {}) {
+    return this._query(mutation, variables);
+  }
+
+  async saveMessage(room, msg) {
+    return this._mutate(`mutation($room: String!, $msg: jsonb!) {
+      insert_gridlock_messages_one(object: { room: $room, data: $msg }) { id }
+    }`, { room, msg });
+  }
+
+  async getMessages(room, n = 50) {
+    const data = await this._query(`query($room: String!, $n: Int!) {
+      gridlock_messages(where: { room: { _eq: $room } }, order_by: { created_at: desc }, limit: $n) { data }
+    }`, { room, n });
+    return (data?.gridlock_messages || []).map(r => r.data).reverse();
+  }
+
+  async saveFile(room, entry) {
+    return this._mutate(`mutation($room: String!, $entry: jsonb!) {
+      insert_gridlock_files_one(object: { room: $room, data: $entry }) { id }
+    }`, { room, entry });
+  }
+
+  async getFiles(room) {
+    const data = await this._query(`query($room: String!) {
+      gridlock_files(where: { room: { _eq: $room } }) { data }
+    }`, { room });
+    return (data?.gridlock_files || []).map(r => r.data);
+  }
+
+  async saveState(room, key, value) {
+    return this._mutate(`mutation($room: String!, $key: String!, $value: jsonb!) {
+      insert_gridlock_state_one(object: { room: $room, key: $key, value: $value },
+        on_conflict: { constraint: gridlock_state_pkey, update_columns: [value] }) { key }
+    }`, { room, key, value });
+  }
+
+  async getState(room, key) {
+    const data = await this._query(`query($room: String!, $key: String!) {
+      gridlock_state_by_pk(room: $room, key: $key) { value }
+    }`, { room, key });
+    return data?.gridlock_state_by_pk?.value ?? null;
+  }
+
+  async getFullState(room) {
+    const data = await this._query(`query($room: String!) {
+      gridlock_state(where: { room: { _eq: $room } }) { key, value }
+    }`, { room });
+    const s = {};
+    (data?.gridlock_state || []).forEach(r => { s[r.key] = r.value; });
+    return s;
+  }
+
+  async savePeer(room, peer) {
+    return this._mutate(`mutation($room: String!, $peer: jsonb!) {
+      insert_gridlock_peers_one(object: { room: $room, data: $peer },
+        on_conflict: { constraint: gridlock_peers_pkey, update_columns: [data] }) { room }
+    }`, { room, peer });
+  }
+
+  async getPeers(room) {
+    const data = await this._query(`query($room: String!) {
+      gridlock_peers(where: { room: { _eq: $room } }) { data }
+    }`, { room });
+    return (data?.gridlock_peers || []).map(r => r.data);
+  }
+
+  async destroy() { this.ready = false; }
+}
+
+// --- Redis Provider (Pub/Sub + Persistence via HTTP bridge) ---
+// Connects to Redis via a REST bridge (e.g., webdis, redis-rest, Upstash Redis)
+// Keys: gridlock:{room}:messages (list), :files (list), :state:{key} (string), :peers (set)
+class RedisProvider extends BaseProvider {
+  constructor() { super('redis'); }
+
+  async init(config) {
+    // config: { url, token?, password? }
+    // url: Upstash REST URL, Webdis URL, or custom Redis HTTP bridge
+    this.url = config.url.replace(/\/$/, '');
+    this.headers = {};
+    if (config.token) this.headers['Authorization'] = `Bearer ${config.token}`;
+    else if (config.password) this.headers['Authorization'] = `Basic ${btoa(':' + config.password)}`;
+    // Test
+    const res = await this._cmd('PING');
+    if (!res) throw new Error('Redis unreachable');
+    this.ready = true;
+  }
+
+  async _cmd(...args) {
+    const res = await fetch(`${this.url}/${args.join('/')}`, { headers: this.headers });
+    if (!res.ok) return null;
+    return res.json();
+  }
+
+  async _cmdPost(cmd, ...args) {
+    const res = await fetch(this.url, {
+      method: 'POST', headers: { ...this.headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify([cmd, ...args])
+    });
+    if (!res.ok) return null;
+    return res.json();
+  }
+
+  _key(room, sub) { return `gridlock:${room}:${sub}`; }
+
+  async saveMessage(room, msg) {
+    await this._cmdPost('RPUSH', this._key(room, 'messages'), JSON.stringify(msg));
+    await this._cmdPost('LTRIM', this._key(room, 'messages'), '-1000', '-1');
+  }
+
+  async getMessages(room, n = 50) {
+    const data = await this._cmd('LRANGE', this._key(room, 'messages'), `-${n}`, '-1');
+    const list = data?.LRANGE || data?.result || [];
+    return list.map(s => { try { return JSON.parse(s); } catch { return s; } });
+  }
+
+  async saveFile(room, entry) {
+    await this._cmdPost('RPUSH', this._key(room, 'files'), JSON.stringify(entry));
+  }
+
+  async getFiles(room) {
+    const data = await this._cmd('LRANGE', this._key(room, 'files'), '0', '-1');
+    const list = data?.LRANGE || data?.result || [];
+    return list.map(s => { try { return JSON.parse(s); } catch { return s; } });
+  }
+
+  async saveState(room, key, value) {
+    await this._cmdPost('SET', this._key(room, `state:${key}`), JSON.stringify(value));
+  }
+
+  async getState(room, key) {
+    const data = await this._cmd('GET', this._key(room, `state:${key}`));
+    const val = data?.GET ?? data?.result;
+    try { return JSON.parse(val); } catch { return val; }
+  }
+
+  async getFullState(room) {
+    const keys = await this._cmd('KEYS', this._key(room, 'state:*'));
+    const keyList = keys?.KEYS || keys?.result || [];
+    const state = {};
+    for (const k of keyList) {
+      const short = k.split(':').pop();
+      state[short] = await this.getState(room, short);
+    }
+    return state;
+  }
+
+  async savePeer(room, peer) {
+    await this._cmdPost('HSET', this._key(room, 'peers'), peer.id, JSON.stringify(peer));
+  }
+
+  async getPeers(room) {
+    const data = await this._cmd('HVALS', this._key(room, 'peers'));
+    const list = data?.HVALS || data?.result || [];
+    return list.map(s => { try { return JSON.parse(s); } catch { return s; } });
+  }
+
+  async destroy() { this.ready = false; }
+}
+
+// --- Raw TCP/UDP Provider (via WebSocket bridge) ---
+// For custom binary/text protocols over TCP or UDP.
+// Requires a WebSocket-to-TCP/UDP bridge on your network.
+class RawSocketProvider extends BaseProvider {
+  constructor() { super('socket'); }
+
+  async init(config) {
+    // config: { bridgeUrl, protocol?: 'tcp'|'udp', host, port, encoding?: 'json'|'line'|'raw' }
+    this.encoding = config.encoding || 'json';
+    this.buffer = [];
+    this.pending = new Map();
+    this.msgId = 0;
+
+    return new Promise((resolve, reject) => {
+      this.ws = new WebSocket(config.bridgeUrl);
+      this.ws.onopen = () => {
+        // Tell bridge to connect to target
+        this.ws.send(JSON.stringify({
+          action: 'connect',
+          protocol: config.protocol || 'tcp',
+          host: config.host,
+          port: config.port
+        }));
+        this.ready = true;
+        resolve();
+      };
+      this.ws.onerror = (e) => reject(e);
+      this.ws.onmessage = (e) => {
+        try {
+          const msg = JSON.parse(e.data);
+          if (msg._id && this.pending.has(msg._id)) {
+            this.pending.get(msg._id)(msg.data);
+            this.pending.delete(msg._id);
+          } else {
+            this.buffer.push(msg);
+          }
+        } catch {
+          this.buffer.push(e.data);
+        }
+      };
+    });
+  }
+
+  _send(action, params) {
+    return new Promise((resolve) => {
+      const _id = ++this.msgId;
+      this.pending.set(_id, resolve);
+      this.ws.send(JSON.stringify({ _id, action, ...params }));
+      setTimeout(() => { if (this.pending.has(_id)) { this.pending.delete(_id); resolve(null); } }, 5000);
+    });
+  }
+
+  async saveMessage(room, msg) { return this._send('write', { channel: `${room}/messages`, data: msg }); }
+  async getMessages(room, n = 50) { return (await this._send('read', { channel: `${room}/messages`, n })) || []; }
+  async saveFile(room, entry) { return this._send('write', { channel: `${room}/files`, data: entry }); }
+  async getFiles(room) { return (await this._send('read', { channel: `${room}/files` })) || []; }
+  async saveState(room, key, value) { return this._send('write', { channel: `${room}/state/${key}`, data: value }); }
+  async getState(room, key) { return this._send('read', { channel: `${room}/state/${key}` }); }
+  async getFullState(room) { return (await this._send('read', { channel: `${room}/state` })) || {}; }
+  async savePeer(room, peer) { return this._send('write', { channel: `${room}/peers`, data: peer }); }
+  async getPeers(room) { return (await this._send('read', { channel: `${room}/peers` })) || []; }
+
+  async destroy() {
+    this.ws?.close();
+    this.ready = false;
+  }
+}
+
 // --- Provider Registry ---
 const Providers = {
   _registry: {
@@ -346,6 +793,12 @@ const Providers = {
     rest: RestProvider,
     websocket: WebSocketProvider,
     ignition: IgnitionProvider,
+    mqtt: MQTTProvider,
+    opcua: OPCUAProvider,
+    amqp: AMQPProvider,
+    graphql: GraphQLProvider,
+    redis: RedisProvider,
+    socket: RawSocketProvider,
     custom: CustomProvider,
   },
 

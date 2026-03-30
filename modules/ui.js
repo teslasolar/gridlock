@@ -184,8 +184,14 @@ const UI = {
           supabase: '{\n  "url": "https://xxx.supabase.co",\n  "anonKey": "your-anon-key"\n}',
           firebase: '{\n  "apiKey": "...",\n  "authDomain": "xxx.firebaseapp.com",\n  "projectId": "xxx"\n}',
           rest: '{\n  "baseUrl": "https://your-api.com",\n  "headers": { "Authorization": "Bearer ..." }\n}',
+          graphql: '{\n  "endpoint": "https://your-api.com/graphql",\n  "headers": { "x-hasura-admin-secret": "..." }\n}',
           websocket: '{\n  "url": "wss://your-server.com/ws"\n}',
+          redis: '{\n  "url": "https://your-redis.upstash.io",\n  "token": "your-upstash-token"\n}',
+          mqtt: '{\n  "brokerUrl": "wss://broker.hivemq.com:8884/mqtt",\n  "username": "optional",\n  "password": "optional"\n}',
+          opcua: '{\n  "gatewayUrl": "http://localhost:4840/api",\n  "namespace": "gridlock"\n}',
+          amqp: '{\n  "managementUrl": "http://localhost:15672/api",\n  "username": "guest",\n  "password": "guest"\n}',
           ignition: '{\n  "baseUrl": "https://ignition-host:8088",\n  "project": "gridlock",\n  "apiKey": "optional"\n}',
+          socket: '{\n  "bridgeUrl": "ws://localhost:9090",\n  "protocol": "tcp",\n  "host": "127.0.0.1",\n  "port": 5000\n}',
           custom: '{\n  "your": "config here"\n}'
         };
         this.el.providerConfig.value = templates[val] || '{}';

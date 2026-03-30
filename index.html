@@ -73,12 +73,26 @@
             <div id="provider-status">none</div>
             <select id="provider-select">
               <option value="">-- select --</option>
-              <option value="supabase">Supabase</option>
-              <option value="firebase">Firebase</option>
-              <option value="rest">REST API</option>
-              <option value="websocket">WebSocket</option>
-              <option value="ignition">Ignition GW</option>
-              <option value="custom">Custom</option>
+              <optgroup label="Database">
+                <option value="supabase">Supabase</option>
+                <option value="firebase">Firebase</option>
+                <option value="redis">Redis</option>
+              </optgroup>
+              <optgroup label="API">
+                <option value="rest">REST API</option>
+                <option value="graphql">GraphQL</option>
+                <option value="websocket">WebSocket</option>
+              </optgroup>
+              <optgroup label="Industrial">
+                <option value="ignition">Ignition GW</option>
+                <option value="opcua">OPC-UA</option>
+                <option value="mqtt">MQTT</option>
+                <option value="amqp">AMQP / RabbitMQ</option>
+              </optgroup>
+              <optgroup label="Other">
+                <option value="socket">Raw TCP/UDP</option>
+                <option value="custom">Custom</option>
+              </optgroup>
             </select>
             <div id="provider-config-area" hidden>
               <textarea id="provider-config" rows="4" placeholder='{"url":"...","anonKey":"..."}'></textarea>

@@ -5,6 +5,7 @@ import Files from './files.js';
 import Screen from './screen.js';
 import LLM from './llm.js';
 import DB from './db.js';
+import Providers from './providers.js';
 
 const UI = {
   peers: new Map(),
@@ -44,6 +45,12 @@ const UI = {
       llmInputArea: document.getElementById('llm-input-area'),
       llmInput: document.getElementById('llm-input'),
       btnLlmAsk: document.getElementById('btn-llm-ask'),
+      providerStatus: document.getElementById('provider-status'),
+      providerSelect: document.getElementById('provider-select'),
+      providerConfigArea: document.getElementById('provider-config-area'),
+      providerConfig: document.getElementById('provider-config'),
+      btnProviderConnect: document.getElementById('btn-provider-connect'),
+      btnProviderDisconnect: document.getElementById('btn-provider-disconnect'),
     };
   },
 
@@ -77,6 +84,36 @@ const UI = {
     this.el.btnLlmAsk.onclick = () => this._askLLM();
     this.el.llmInput.onkeydown = (e) => {
       if (e.key === 'Enter') this._askLLM();
+    };
+
+    // Provider UI
+    this.el.providerSelect.onchange = () => {
+      const val = this.el.providerSelect.value;
+      this.el.providerConfigArea.hidden = !val;
+      if (val) {
+        const templates = {
+          supabase: '{\n  "url": "https://xxx.supabase.co",\n  "anonKey": "your-anon-key"\n}',
+          firebase: '{\n  "apiKey": "...",\n  "authDomain": "xxx.firebaseapp.com",\n  "projectId": "xxx"\n}',
+          rest: '{\n  "baseUrl": "https://your-api.com",\n  "headers": { "Authorization": "Bearer ..." }\n}',
+          websocket: '{\n  "url": "wss://your-server.com/ws"\n}',
+          ignition: '{\n  "baseUrl": "https://ignition-host:8088",\n  "project": "gridlock",\n  "apiKey": "optional"\n}',
+          custom: '{\n  "your": "config here"\n}'
+        };
+        this.el.providerConfig.value = templates[val] || '{}';
+      }
+    };
+    this.el.btnProviderConnect.onclick = () => {
+      const name = this.el.providerSelect.value;
+      if (!name) return;
+      try {
+        const config = JSON.parse(this.el.providerConfig.value);
+        if (this._onProviderConnect) this._onProviderConnect(name, config);
+      } catch (e) {
+        this.appendSystemMsg('invalid config JSON');
+      }
+    };
+    this.el.btnProviderDisconnect.onclick = () => {
+      if (this._onProviderDisconnect) this._onProviderDisconnect();
     };
   },
 
@@ -152,6 +189,15 @@ const UI = {
     div.textContent = text;
     this.el.chatMessages.appendChild(div);
     this.el.chatMessages.scrollTop = this.el.chatMessages.scrollHeight;
+  },
+
+  setProviderStatus(name, connected) {
+    this.el.providerStatus.textContent = connected ? `${name} connected` : 'none';
+    this.el.providerStatus.className = connected ? 'connected' : '';
+    this.el.btnProviderDisconnect.hidden = !connected;
+    this.el.providerConfigArea.hidden = connected;
+    if (connected) this.el.providerSelect.disabled = true;
+    else this.el.providerSelect.disabled = false;
   },
 
   showScreen(peerId, stream) {
@@ -240,6 +286,8 @@ const UI = {
   _onChatSend: null,
   _onFileShare: null,
   _onFileDownload: null,
+  _onProviderConnect: null,
+  _onProviderDisconnect: null,
 };
 
 export default UI;

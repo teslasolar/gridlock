@@ -146,7 +146,7 @@ header {
   border-radius: 3px;
   cursor: pointer;
 }
-#llm-input {
+#llm-input, #provider-config {
   font-family: var(--font);
   font-size: 0.75rem;
   padding: 0.3rem;
@@ -155,9 +155,34 @@ header {
   border: 1px solid var(--border);
   border-radius: 3px;
   width: 100%;
+  resize: vertical;
   outline: none;
   margin-top: 0.3rem;
 }
+#provider-status { font-size: 0.7rem; color: var(--dim); padding: 0.2rem 0; }
+#provider-status.connected { color: var(--green); }
+#provider-select {
+  font-family: var(--font);
+  font-size: 0.7rem;
+  padding: 0.25rem;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  width: 100%;
+}
+#btn-provider-connect, #btn-provider-disconnect {
+  font-family: var(--font);
+  font-size: 0.7rem;
+  padding: 0.25rem 0.5rem;
+  background: var(--surface);
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  cursor: pointer;
+  margin-top: 0.3rem;
+}
+#btn-provider-disconnect { color: var(--red); border-color: var(--red); }
 
 /* MAIN VIEW */
 #main-view {

@@ -53,6 +53,24 @@
               <button id="btn-llm-ask">ask</button>
             </div>
           </section>
+          <section id="provider-panel">
+            <h3>DB PROVIDER</h3>
+            <div id="provider-status">none</div>
+            <select id="provider-select">
+              <option value="">-- select --</option>
+              <option value="supabase">Supabase</option>
+              <option value="firebase">Firebase</option>
+              <option value="rest">REST API</option>
+              <option value="websocket">WebSocket</option>
+              <option value="ignition">Ignition GW</option>
+              <option value="custom">Custom</option>
+            </select>
+            <div id="provider-config-area" hidden>
+              <textarea id="provider-config" rows="4" placeholder='{"url":"...","anonKey":"..."}'></textarea>
+              <button id="btn-provider-connect">connect</button>
+            </div>
+            <button id="btn-provider-disconnect" hidden>disconnect</button>
+          </section>
         </aside>
 
         <!-- MAIN VIEW -->
@@ -81,6 +99,7 @@
   </div>
 
   <script type="module" src="modules/db.js"></script>
+  <script type="module" src="modules/providers.js"></script>
   <script type="module" src="modules/state.js"></script>
   <script type="module" src="modules/voice.js"></script>
   <script type="module" src="modules/camera.js"></script>

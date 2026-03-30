@@ -8,6 +8,7 @@ import Chat from './chat.js';
 import Files from './files.js';
 import State from './state.js';
 import DB from './db.js';
+import Providers from './providers.js';
 
 const ME = { id: null, name: null, room: null, peer: null };
 const connections = new Map(); // peerId → { pc, dataChannel }
@@ -165,6 +166,53 @@ async function join(name, room) {
   Chat.onMessageCallback = (msg) => {
     UI.appendChat(msg);
     DB.put('chatHistory', { ...msg, id: `${msg.timestamp}-${msg.from}` }).catch(() => {});
+    // Persist to external provider if connected
+    const p = Providers.get();
+    if (p?.ready) p.saveMessage(ME.room, msg).catch(() => {});
+  };
+
+  // Provider-aware file share wrapper
+  const origFileShare = UI._onFileShare;
+  UI._onFileShare = async (file) => {
+    await origFileShare(file);
+    const p = Providers.get();
+    if (p?.ready) {
+      const latest = Files.getIndex().slice(-1)[0];
+      if (latest) p.saveFile(ME.room, latest).catch(() => {});
+    }
+  };
+
+  // Wire up provider connect UI
+  UI._onProviderConnect = async (providerName, config) => {
+    try {
+      await Providers.connect(providerName, config);
+      UI.appendSystemMsg(`connected to ${providerName}`);
+      UI.setProviderStatus(providerName, true);
+      // Sync: load history from provider
+      const p = Providers.get();
+      const msgs = await p.getMessages(ME.room, 100).catch(() => []);
+      if (msgs?.length) {
+        UI.appendSystemMsg(`loaded ${msgs.length} messages from ${providerName}`);
+        msgs.forEach(m => UI.appendChat(m));
+      }
+      const files = await p.getFiles(ME.room).catch(() => []);
+      if (files?.length) {
+        files.forEach(f => Files.onFileShared(f));
+        UI.updateFileList(Files.getIndex());
+      }
+      // Register presence
+      p.savePeer(ME.room, { id: ME.id, name: ME.name }).catch(() => {});
+    } catch (err) {
+      UI.appendSystemMsg(`provider error: ${err.message}`);
+      UI.setProviderStatus(null, false);
+    }
+  };
+
+  UI._onProviderDisconnect = async () => {
+    const name = Providers.get()?.name;
+    await Providers.disconnect();
+    UI.appendSystemMsg(`disconnected from ${name || 'provider'}`);
+    UI.setProviderStatus(null, false);
   };
 }
 

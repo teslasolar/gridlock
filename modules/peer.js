@@ -14,6 +14,7 @@ import DB from './db.js';
 import Providers from './providers.js';
 import Bridge from './bridge.js';
 import Media from './media.js';
+import Mesh3D from './mesh3d.js';
 
 console.log('[gridlock] peer.js loaded');
 
@@ -41,6 +42,14 @@ async function join(name, room) {
   UI.appendSystemMsg(`joining ${room} as ${name}...`);
   wireCallbacks();
 
+  // Init 3D mesh view
+  const meshEl = document.getElementById('mesh-canvas');
+  if (meshEl) {
+    Mesh3D.destroy();
+    meshEl.innerHTML = '';
+    Mesh3D.init(meshEl).catch(e => console.warn('[mesh3d] init failed:', e.message));
+  }
+
   // Load chat history from IndexedDB
   try {
     const saved = await DB.getAll('chatHistory');
@@ -58,6 +67,7 @@ async function join(name, room) {
     console.log('[gridlock] peer connected:', peerId.slice(0, 12));
     UI.addPeer(peerId, peerId.slice(0, 12));
     UI.updatePeerCount();
+    Mesh3D.addPeer(peerId, peerId.slice(0, 12));
 
     dc.addEventListener('message', (e) => handleDataMessage(peerId, e.data));
 
@@ -94,13 +104,17 @@ async function join(name, room) {
 
     if (track.kind === 'audio') {
       Voice.onRemoteStream(peerId, stream);
-      Voice.detectSpeaking(stream, (speaking) => UI.setSpeaking(peerId, speaking));
+      Voice.detectSpeaking(stream, (speaking) => {
+        UI.setSpeaking(peerId, speaking);
+        Mesh3D.setSpeaking(peerId, speaking);
+      });
     } else if (track.kind === 'video') {
       // Distinguish screen share from camera by resolution
       const settings = track.getSettings();
       if (settings.width > 640 || settings.displaySurface) {
         Screen.onRemoteScreen(peerId, stream);
         UI.showScreen(peerId, stream);
+        Mesh3D.setSharing(peerId, true);
         UI.appendSystemMsg(`${name} is sharing their screen`);
       } else {
         UI.addCameraStream(peerId, stream, name);
@@ -218,6 +232,7 @@ function wireCallbacks() {
         const stream = await Screen.share();
         UI.setScreenActive(true);
         UI.appendSystemMsg('screen sharing started');
+        Mesh3D.setSharing('self', true);
         Signal.broadcast({ type: 'screen_start', peerId: ME.id });
         // Add screen tracks to all peers
         stream.getTracks().forEach(t => Signal.addTrackToAll(t, stream));
@@ -281,6 +296,22 @@ function wireCallbacks() {
       if (msg.text.includes('(via GRIDLOCK)')) return;
       UI.appendChat(msg);
     };
+    // Status beacon — external agents can read room state
+    Bridge.getStatus = () => ({
+      beacon: true,
+      room: ME.room,
+      me: { id: ME.id, name: ME.name },
+      peers: [...UI.peers.entries()].map(([id, p]) => ({ id: id.slice(0, 16), name: p.name })),
+      peerCount: UI.peers.size + 1,
+      signalPeers: Signal.peerCount(),
+      chatMessages: Chat.history.length,
+      mediaItems: Media.items.length,
+      fileCount: Files.getIndex().length,
+      mic: !Voice.isMuted() && !!Voice.stream,
+      camera: Camera.isOn(),
+      screen: Screen.isSharing(),
+      timestamp: new Date().toISOString()
+    });
     Bridge.start(owner, repo, issueNumber, token || null);
     UI.appendSystemMsg(`bridge active: ${owner}/${repo}#${issueNumber}`);
     UI.setBridgeStatus(true);
@@ -346,6 +377,8 @@ function handleDataMessage(peerId, data) {
         const name = msg.name || peerId.slice(0, 12);
         console.log('[gridlock] peer announced:', name);
         UI.addPeer(peerId, name);
+        Mesh3D.removePeer(peerId);
+        Mesh3D.addPeer(peerId, name);
         UI.appendSystemMsg(`${name} joined`);
         break;
       }
@@ -368,6 +401,7 @@ function handlePeerLeave(peerId) {
   Voice.removeRemoteStream(peerId);
   Screen.removeRemoteScreen(peerId);
   UI.removePeer(peerId);
+  Mesh3D.removePeer(peerId);
   UI.appendSystemMsg(`${name} left`);
 }
 
@@ -375,6 +409,7 @@ function cleanupRoom() {
   Signal.cleanup();
   Bridge.stop();
   Media.clear();
+  Mesh3D.destroy();
   Voice.stop();
   Camera.stop();
   Screen.stop();

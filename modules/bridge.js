@@ -1,21 +1,21 @@
-// bridge.js — GitHub Issue chat bridge
+// bridge.js — GitHub Issue chat bridge + status beacon
 // Polls a GitHub Issue for new comments and displays them in chat.
-// Posts local chat messages as issue comments via GitHub API.
-// This is how CLI/server agents talk to browser peers when WebRTC isn't available.
+// Posts status beacon so external agents can query room state.
 
 const Bridge = {
   active: false,
-  issueUrl: null,   // e.g. "https://api.github.com/repos/teslasolar/gridlock/issues/1/comments"
+  issueUrl: null,
   owner: null,
   repo: null,
   issueNumber: null,
-  token: null,       // optional GitHub PAT for posting
-  lastSeen: null,    // ISO timestamp of last seen comment
+  token: null,
+  lastSeen: null,
   pollInterval: null,
-  onMessage: null,   // callback(msg) when new comment arrives
+  beaconInterval: null,
+  onMessage: null,
   seenIds: new Set(),
+  getStatus: null,  // callback() → returns current room status object
 
-  // Start polling a GitHub issue for comments
   start(owner, repo, issueNumber, token) {
     this.owner = owner;
     this.repo = repo;
@@ -27,20 +27,20 @@ const Bridge = {
     this.lastSeen = new Date().toISOString();
 
     console.log(`[bridge] started polling ${owner}/${repo}#${issueNumber}`);
-
-    // Initial fetch to get existing comments
     this._poll(true);
-
-    // Poll every 5 seconds
     this.pollInterval = setInterval(() => this._poll(false), 5000);
+
+    // Status beacon — post room state every 30s (only if token is available)
+    if (this.token && this.getStatus) {
+      this._postBeacon();
+      this.beaconInterval = setInterval(() => this._postBeacon(), 30000);
+    }
   },
 
   stop() {
     this.active = false;
-    if (this.pollInterval) {
-      clearInterval(this.pollInterval);
-      this.pollInterval = null;
-    }
+    if (this.pollInterval) { clearInterval(this.pollInterval); this.pollInterval = null; }
+    if (this.beaconInterval) { clearInterval(this.beaconInterval); this.beaconInterval = null; }
     console.log('[bridge] stopped');
   },
 
@@ -55,10 +55,7 @@ const Bridge = {
       if (this.token) headers['Authorization'] = `token ${this.token}`;
 
       const res = await fetch(url, { headers });
-      if (!res.ok) {
-        console.warn('[bridge] poll failed:', res.status);
-        return;
-      }
+      if (!res.ok) return;
 
       const comments = await res.json();
       const toShow = initial ? comments.reverse().slice(-10) : comments;
@@ -66,6 +63,9 @@ const Bridge = {
       for (const c of toShow) {
         if (this.seenIds.has(c.id)) continue;
         this.seenIds.add(c.id);
+
+        // Skip beacon posts
+        if (c.body.startsWith('```json\n{"beacon"')) continue;
 
         const msg = {
           from: `gh:${c.user.login}`,
@@ -83,12 +83,8 @@ const Bridge = {
     }
   },
 
-  // Post a message to the GitHub issue
   async post(text, authorName) {
-    if (!this.active || !this.token) {
-      console.warn('[bridge] cannot post: no token or bridge not active');
-      return false;
-    }
+    if (!this.active || !this.token) return false;
     try {
       const body = `**${authorName}** (via GRIDLOCK):\n\n${text}`;
       const res = await fetch(this.issueUrl, {
@@ -100,14 +96,30 @@ const Bridge = {
         },
         body: JSON.stringify({ body })
       });
-      if (!res.ok) {
-        console.warn('[bridge] post failed:', res.status);
-        return false;
-      }
-      return true;
+      return res.ok;
     } catch (e) {
-      console.warn('[bridge] post error:', e.message);
       return false;
+    }
+  },
+
+  // Post room status as a JSON beacon comment
+  async _postBeacon() {
+    if (!this.active || !this.token || !this.getStatus) return;
+    try {
+      const status = this.getStatus();
+      const body = '```json\n' + JSON.stringify(status, null, 2) + '\n```';
+      await fetch(this.issueUrl, {
+        method: 'POST',
+        headers: {
+          'Accept': 'application/vnd.github.v3+json',
+          'Authorization': `token ${this.token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ body })
+      });
+      console.log('[bridge] beacon posted');
+    } catch (e) {
+      console.warn('[bridge] beacon error:', e.message);
     }
   }
 };

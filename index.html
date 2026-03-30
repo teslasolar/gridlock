@@ -106,6 +106,7 @@
         <main id="main-view">
           <div id="view-tabs">
             <button class="view-tab active" data-view="media">GRID</button>
+            <button class="view-tab" data-view="mesh">MESH</button>
             <button class="view-tab" data-view="cameras">CAMS</button>
             <button class="view-tab" data-view="screen">SCREEN</button>
           </div>
@@ -117,6 +118,11 @@
               <input type="text" id="media-input" placeholder="paste URL — youtube, image, any link..." autocomplete="off" />
               <button id="btn-media-add">SHARE</button>
             </div>
+          </div>
+
+          <!-- 3D MESH -->
+          <div id="mesh-view" class="view-panel">
+            <div id="mesh-canvas"></div>
           </div>
 
           <!-- CAMERAS -->

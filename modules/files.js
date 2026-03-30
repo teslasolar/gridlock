@@ -1,7 +1,5 @@
 // files.js — WebTorrent-based P2P file sharing
 
-import State from './state.js';
-
 const Files = {
   client: null,
   index: [],
@@ -25,7 +23,6 @@ const Files = {
           timestamp: Date.now()
         };
         this.index.push(entry);
-        State.broadcast({ type: 'file_shared', entry }, myId);
         resolve(entry);
       });
     });
@@ -46,20 +43,18 @@ const Files = {
 
   onFileShared(entry) {
     const exists = this.index.some(e => e.infoHash === entry.infoHash);
-    if (!exists) {
-      this.index.push(entry);
-    }
+    if (!exists) this.index.push(entry);
   },
 
-  getIndex() {
-    return [...this.index];
-  },
+  getIndex() { return [...this.index]; },
 
   formatSize(bytes) {
     if (bytes < 1024) return bytes + ' B';
     if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
     return (bytes / 1048576).toFixed(1) + ' MB';
-  }
+  },
+
+  clear() { this.index = []; }
 };
 
 export default Files;

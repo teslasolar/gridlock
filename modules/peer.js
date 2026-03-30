@@ -1,5 +1,6 @@
 // peer.js — main orchestrator
-// Uses WebTorrent tracker signaling (signal.js) for global P2P.
+// All broadcasting goes through Signal.broadcast.
+// Media tracks (voice/camera/screen) attached via Signal.addTrackToAll.
 
 import UI from './ui.js';
 import Signal from './signal.js';
@@ -19,8 +20,6 @@ console.log('[gridlock] peer.js loaded');
 const GLOBAL_ROOM = 'lobby';
 const ME = { id: null, name: null, room: null };
 
-// --- Utilities ---
-
 function generateAnonName() {
   const adj = ['swift','bright','calm','dark','keen','bold','warm','cool','wild','free'];
   const noun = ['fox','owl','elk','ray','bee','ant','cat','bat','jay','ram'];
@@ -30,30 +29,56 @@ function generateAnonName() {
 // --- Join Room ---
 
 async function join(name, room) {
-  console.log('[gridlock] join() called, name:', name, 'room:', room);
+  console.log('[gridlock] join(), name:', name, 'room:', room);
   ME.name = name;
   ME.room = room;
 
-  try { await DB.init(); } catch (e) { console.warn('[gridlock] DB init failed:', e.message); }
+  try { await DB.init(); } catch (e) { console.warn('[gridlock] DB init:', e.message); }
   Files.init();
+  State.init((data) => Signal.broadcast(data));
 
-  // Show main UI immediately
   UI.showMain(room, name);
   UI.appendSystemMsg(`joining ${room} as ${name}...`);
-
-  // Wire callbacks before connecting
   wireCallbacks();
 
-  // Signal callbacks
-  Signal.onPeerConnect = (peerId, dc) => {
+  // Load chat history from IndexedDB
+  try {
+    const saved = await DB.getAll('chatHistory');
+    if (saved.length) {
+      const recent = saved.slice(-50);
+      UI.appendSystemMsg(`loaded ${recent.length} messages from history`);
+      recent.forEach(m => UI.appendChat(m));
+      Chat.history = recent;
+    }
+  } catch (e) { /* no history */ }
+
+  // --- Signal callbacks ---
+
+  Signal.onPeerConnect = (peerId, dc, pc) => {
     console.log('[gridlock] peer connected:', peerId.slice(0, 12));
-    setupPeerChannel(peerId, dc);
-    // Send our identity
+    UI.addPeer(peerId, peerId.slice(0, 12));
+    UI.updatePeerCount();
+
+    dc.addEventListener('message', (e) => handleDataMessage(peerId, e.data));
+
+    // Send identity
     dc.send(JSON.stringify({ type: 'announce', senderId: ME.id, name: ME.name }));
-    // Send our current media grid
+
+    // Send current media grid
     Media.items.forEach(item => {
       dc.send(JSON.stringify({ type: 'media_add', item }));
     });
+
+    // Attach our active media tracks to this new peer
+    if (Voice.stream) {
+      Voice.stream.getTracks().forEach(t => Signal.addTrackToPeer(peerId, t, Voice.stream));
+    }
+    if (Camera.stream) {
+      Camera.stream.getTracks().forEach(t => Signal.addTrackToPeer(peerId, t, Camera.stream));
+    }
+    if (Screen.stream) {
+      Screen.stream.getTracks().forEach(t => Signal.addTrackToPeer(peerId, t, Screen.stream));
+    }
   };
 
   Signal.onPeerDisconnect = (peerId) => {
@@ -61,57 +86,59 @@ async function join(name, room) {
     handlePeerLeave(peerId);
   };
 
-  Signal.onStatus = (status) => {
-    console.log('[gridlock] signal status:', status);
-    switch (status) {
-      case 'connecting':
-        UI.appendSystemMsg('connecting to tracker...');
-        break;
-      case 'connected':
-        UI.appendSystemMsg('connected to tracker. discovering peers...');
-        break;
-      case 'error':
-        UI.appendSystemMsg('tracker connection failed');
-        break;
-      case 'disconnected':
-        UI.appendSystemMsg('tracker disconnected, reconnecting...');
-        break;
+  // Remote media tracks (voice, camera, screen from other peers)
+  Signal.onRemoteTrack = (peerId, track, streams) => {
+    const stream = streams[0] || new MediaStream([track]);
+    const name = UI.peers.get(peerId)?.name || peerId.slice(0, 12);
+    console.log('[gridlock] remote track:', track.kind, 'from', name);
+
+    if (track.kind === 'audio') {
+      Voice.onRemoteStream(peerId, stream);
+      Voice.detectSpeaking(stream, (speaking) => UI.setSpeaking(peerId, speaking));
+    } else if (track.kind === 'video') {
+      // Distinguish screen share from camera by resolution
+      const settings = track.getSettings();
+      if (settings.width > 640 || settings.displaySurface) {
+        Screen.onRemoteScreen(peerId, stream);
+        UI.showScreen(peerId, stream);
+        UI.appendSystemMsg(`${name} is sharing their screen`);
+      } else {
+        UI.addCameraStream(peerId, stream, name);
+      }
     }
   };
 
-  // Connect via WebTorrent tracker
+  Signal.onStatus = (status) => {
+    console.log('[gridlock] signal:', status);
+    UI.setConnectionStatus(status);
+    if (status === 'connected') {
+      UI.appendSystemMsg('connected to tracker');
+    } else if (status === 'disconnected') {
+      UI.appendSystemMsg('reconnecting...');
+    } else if (status === 'error') {
+      UI.appendSystemMsg('tracker connection failed');
+    }
+  };
+
+  // Connect
   try {
     ME.id = await Signal.join(room, name);
-    console.log('[gridlock] signal joined, id:', ME.id);
-    UI.appendSystemMsg(`connected (${ME.id.slice(0, 12)})`);
+    console.log('[gridlock] joined, id:', ME.id);
+    UI.appendSystemMsg(`online (${ME.id.slice(0, 12)})`);
   } catch (err) {
-    console.error('[gridlock] signal join failed:', err);
-    UI.appendSystemMsg(`connection failed: ${err.message}`);
+    console.error('[gridlock] join failed:', err);
+    UI.appendSystemMsg(`failed: ${err.message}`);
   }
-}
-
-// --- Set up a data channel with a peer ---
-
-function setupPeerChannel(peerId, dc) {
-  UI.addPeer(peerId, peerId.slice(0, 12));
-  Chat.registerChannel(peerId, dc);
-  State.registerChannel(peerId, dc);
-
-  dc.addEventListener('message', (e) => handleDataMessage(peerId, e.data));
 }
 
 // --- Wire UI Callbacks ---
 
 function wireCallbacks() {
-  console.log('[gridlock] wiring callbacks');
+  const bcast = (data) => Signal.broadcast(data);
 
   UI._onChatSend = (text) => {
-    console.log('[gridlock] sending chat:', text.slice(0, 30));
-    Chat.send(text, ME.id, ME.name);
-    // Also relay to bridge if active
-    if (Bridge.active && Bridge.token) {
-      Bridge.post(text, ME.name).catch(() => {});
-    }
+    Chat.send(text, ME.id, ME.name, bcast);
+    if (Bridge.active && Bridge.token) Bridge.post(text, ME.name).catch(() => {});
   };
 
   UI._onFileShare = async (file) => {
@@ -120,7 +147,7 @@ function wireCallbacks() {
     if (entry) {
       UI.updateFileList(Files.getIndex());
       UI.appendSystemMsg(`shared: ${file.name}`);
-      Signal.broadcast({ type: 'file_shared', entry });
+      bcast({ type: 'file_shared', entry });
       const p = Providers.get();
       if (p?.ready) p.saveFile(ME.room, entry).catch(() => {});
     }
@@ -132,9 +159,7 @@ function wireCallbacks() {
       const blob = await Files.download(entry.magnetURI);
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
-      a.href = url;
-      a.download = entry.name;
-      a.click();
+      a.href = url; a.download = entry.name; a.click();
       URL.revokeObjectURL(url);
       UI.appendSystemMsg(`downloaded: ${entry.name}`);
     } catch (err) {
@@ -142,7 +167,6 @@ function wireCallbacks() {
     }
   };
 
-  // Chat message callback (sent messages)
   Chat.onMessageCallback = (msg) => {
     UI.appendChat(msg);
     DB.put('chatHistory', { ...msg, id: `${msg.timestamp}-${msg.from}` }).catch(() => {});
@@ -150,7 +174,7 @@ function wireCallbacks() {
     if (p?.ready) p.saveMessage(ME.room, msg).catch(() => {});
   };
 
-  // Mic
+  // --- Mic ---
   document.getElementById('btn-mic').onclick = async () => {
     if (!Voice.stream) {
       try {
@@ -158,6 +182,8 @@ function wireCallbacks() {
         Voice.unmute();
         UI.setMicActive(true);
         UI.appendSystemMsg('mic on');
+        // Add audio tracks to all peers
+        Voice.stream.getTracks().forEach(t => Signal.addTrackToAll(t, Voice.stream));
       } catch (e) {
         UI.appendSystemMsg('mic access denied');
       }
@@ -167,13 +193,15 @@ function wireCallbacks() {
     }
   };
 
-  // Camera
+  // --- Camera ---
   document.getElementById('btn-cam').onclick = async () => {
     if (!Camera.stream) {
       try {
         await Camera.init();
         UI.setCamActive(true);
         UI.addCameraStream('local', Camera.stream, ME.name);
+        // Add video tracks to all peers
+        Camera.stream.getTracks().forEach(t => Signal.addTrackToAll(t, Camera.stream));
       } catch (e) {
         UI.appendSystemMsg('camera access denied');
       }
@@ -183,26 +211,39 @@ function wireCallbacks() {
     }
   };
 
-  // Screen share
+  // --- Screen ---
   document.getElementById('btn-screen').onclick = async () => {
     if (!Screen.isSharing()) {
       try {
-        await Screen.share(ME.id);
+        const stream = await Screen.share();
         UI.setScreenActive(true);
         UI.appendSystemMsg('screen sharing started');
         Signal.broadcast({ type: 'screen_start', peerId: ME.id });
+        // Add screen tracks to all peers
+        stream.getTracks().forEach(t => Signal.addTrackToAll(t, stream));
+        // When screen share ends (user clicks browser stop)
+        stream.getVideoTracks()[0].onended = () => {
+          Screen.stop();
+          UI.setScreenActive(false);
+          UI.hideScreen();
+          UI.appendSystemMsg('screen sharing stopped');
+          Signal.broadcast({ type: 'screen_stop', peerId: ME.id });
+        };
       } catch (e) {
         UI.appendSystemMsg('screen share cancelled');
       }
     } else {
+      const tracks = Screen.stream.getTracks();
+      tracks.forEach(t => Signal.removeTrackFromAll(t));
       Screen.stop();
       UI.setScreenActive(false);
       UI.hideScreen();
       UI.appendSystemMsg('screen sharing stopped');
+      Signal.broadcast({ type: 'screen_stop', peerId: ME.id });
     }
   };
 
-  // Provider
+  // --- Provider ---
   UI._onProviderConnect = async (providerName, config) => {
     try {
       await Providers.connect(providerName, config);
@@ -233,7 +274,7 @@ function wireCallbacks() {
     UI.setProviderStatus(null, false);
   };
 
-  // Bridge (GitHub Issue chat relay)
+  // --- Bridge ---
   UI._onBridgeConnect = (owner, repo, issueNumber, token) => {
     Bridge.stop();
     Bridge.onMessage = (msg) => {
@@ -241,7 +282,7 @@ function wireCallbacks() {
       UI.appendChat(msg);
     };
     Bridge.start(owner, repo, issueNumber, token || null);
-    UI.appendSystemMsg(`bridge active: ${owner}/${repo}#${issueNumber} (polling every 5s)`);
+    UI.appendSystemMsg(`bridge active: ${owner}/${repo}#${issueNumber}`);
     UI.setBridgeStatus(true);
   };
 
@@ -251,11 +292,10 @@ function wireCallbacks() {
     UI.setBridgeStatus(false);
   };
 
-  // Media grid
+  // --- Media Grid ---
   UI._onMediaAdd = (url) => {
     const item = Media.add(url, ME.name);
     if (item) {
-      console.log('[gridlock] sharing media:', item.type, url.slice(0, 60));
       Signal.broadcast({ type: 'media_add', item });
       UI.appendSystemMsg(`shared: ${item.type} — ${url.slice(0, 50)}`);
     } else {
@@ -278,7 +318,7 @@ function handleDataMessage(peerId, data) {
     const msg = typeof data === 'string' ? JSON.parse(data) : data;
     switch (msg.type) {
       case 'chat':
-        Chat.history.push(msg.msg);
+        Chat.onRemoteMessage(msg.msg);
         UI.appendChat(msg.msg);
         break;
       case 'file_shared':
@@ -295,9 +335,13 @@ function handleDataMessage(peerId, data) {
         UI._renderPeers();
         break;
       }
-      case 'screen_stop':
+      case 'screen_stop': {
+        const peer = UI.peers.get(msg.peerId);
+        if (peer) peer.sharing = false;
+        UI._renderPeers();
         UI.hideScreen();
         break;
+      }
       case 'announce': {
         const name = msg.name || peerId.slice(0, 12);
         console.log('[gridlock] peer announced:', name);
@@ -313,9 +357,7 @@ function handleDataMessage(peerId, data) {
         Media.remove(msg.id);
         break;
     }
-  } catch (e) {
-    // Non-JSON message, ignore
-  }
+  } catch (e) { /* non-JSON */ }
 }
 
 // --- Leave / Switch ---
@@ -325,8 +367,6 @@ function handlePeerLeave(peerId) {
   const name = peerInfo?.name || peerId.slice(0, 12);
   Voice.removeRemoteStream(peerId);
   Screen.removeRemoteScreen(peerId);
-  Chat.removeChannel(peerId);
-  State.removeChannel(peerId);
   UI.removePeer(peerId);
   UI.appendSystemMsg(`${name} left`);
 }
@@ -338,17 +378,13 @@ function cleanupRoom() {
   Voice.stop();
   Camera.stop();
   Screen.stop();
-  Chat.history = [];
-  Chat.channels.clear();
-  State.channels.clear();
-  State.state = {};
-  State.vector = {};
+  Chat.clear();
+  State.clear();
 }
 
 async function switchRoom(newRoom) {
-  console.log('[gridlock] switching room to:', newRoom);
+  console.log('[gridlock] switching to:', newRoom);
   cleanupRoom();
-
   UI.peers.clear();
   document.getElementById('peers-list').innerHTML = '';
   document.getElementById('camera-grid').innerHTML = '';
@@ -359,56 +395,42 @@ async function switchRoom(newRoom) {
   UI.setCamActive(false);
   UI.setScreenActive(false);
   UI.updatePeerCount();
-
   await join(ME.name, newRoom);
 }
 
 // ============================================================
-// BOOT SEQUENCE
+// BOOT
 // ============================================================
 
 console.log('[gridlock] booting...');
 UI.init();
 
 UI.onJoin = async (name) => {
-  console.log('[gridlock] onJoin fired, name:', name);
   localStorage.setItem('gridlock-name', name);
   await join(name, GLOBAL_ROOM);
 };
 
-UI.onLeave = () => {
-  console.log('[gridlock] onLeave → switching to lobby');
-  switchRoom(GLOBAL_ROOM);
-};
+UI.onLeave = () => switchRoom(GLOBAL_ROOM);
 
 // Room switcher
 const switchBtn = document.getElementById('btn-switch-room');
 const roomInput = document.getElementById('input-room');
-
 if (switchBtn && roomInput) {
   switchBtn.addEventListener('click', () => {
     const room = roomInput.value.trim();
-    console.log('[gridlock] switch room clicked, room:', room);
-    if (room && room !== ME.room) {
-      switchRoom(room);
-      roomInput.value = '';
-    }
+    if (room && room !== ME.room) { switchRoom(room); roomInput.value = ''; }
   });
   roomInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { e.preventDefault(); switchBtn.click(); }
   });
 }
 
-// Auto-join or show name prompt
+// Auto-join
 const savedName = localStorage.getItem('gridlock-name');
-console.log('[gridlock] saved name:', savedName);
-
 if (savedName) {
-  console.log('[gridlock] auto-joining lobby as:', savedName);
   document.getElementById('join-screen').hidden = true;
   join(savedName, GLOBAL_ROOM);
 } else {
-  console.log('[gridlock] no saved name, showing join screen');
   const nameInput = document.getElementById('input-name');
   nameInput.value = generateAnonName();
   nameInput.select();

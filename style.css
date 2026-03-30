@@ -73,6 +73,15 @@ header {
   background: var(--surface);
   border-bottom: 1px solid var(--border);
 }
+.conn-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: #666; display: inline-block; flex-shrink: 0;
+}
+.conn-dot.connecting { background: #f97316; animation: pulse 1s infinite; }
+.conn-dot.connected { background: var(--green); }
+.conn-dot.error { background: var(--red); }
+@keyframes connpulse { 50% { opacity: 0.4; } }
+.conn-dot.connecting { animation: connpulse 1s infinite; }
 #room-label { font-weight: bold; color: var(--accent); }
 #name-label { color: var(--green); font-size: 0.8rem; font-weight: bold; }
 #peer-count { color: var(--dim); font-size: 0.85rem; }

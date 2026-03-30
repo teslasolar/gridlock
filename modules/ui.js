@@ -1,10 +1,7 @@
 // ui.js — DOM rendering + event wiring
 
-import Chat from './chat.js';
 import Files from './files.js';
-import Screen from './screen.js';
 import LLM from './llm.js';
-import DB from './db.js';
 import Providers from './providers.js';
 import Media from './media.js';
 
@@ -24,6 +21,7 @@ const UI = {
 
   _cacheElements() {
     this.el = {
+      connDot: document.getElementById('conn-dot'),
       joinScreen: document.getElementById('join-screen'),
       mainUI: document.getElementById('main-ui'),
       inputName: document.getElementById('input-name'),
@@ -267,6 +265,15 @@ const UI = {
 
   updatePeerCount() {
     this.el.peerCount.textContent = `${this.peers.size + 1} peers`;
+  },
+
+  setConnectionStatus(status) {
+    const dot = this.el.connDot;
+    if (!dot) return;
+    dot.className = 'conn-dot';
+    if (status === 'connecting' || status === 'disconnected') dot.classList.add('connecting');
+    else if (status === 'connected') dot.classList.add('connected');
+    else if (status === 'error') dot.classList.add('error');
   },
 
   appendChat(msg) {

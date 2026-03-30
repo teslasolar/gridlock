@@ -1,6 +1,6 @@
-// signal.js — WebTorrent tracker signaling
+// signal.js — WebTorrent tracker signaling + media transport
 // Uses wss://tracker.openwebtorrent.com for reliable global peer discovery.
-// The tracker only sees room hashes and peer IDs — never message content.
+// Exposes RTCPeerConnection for media track attachment (voice/camera/screen).
 
 const TRACKER_URL = 'wss://tracker.openwebtorrent.com';
 const ICE_CONFIG = {
@@ -23,18 +23,17 @@ const Signal = {
   active: false,
 
   // Callbacks — set by peer.js
-  onPeerConnect: null,    // (peerId, dataChannel)
+  onPeerConnect: null,    // (peerId, dataChannel, peerConnection)
   onPeerDisconnect: null, // (peerId)
-  onStatus: null,         // (status: 'connecting'|'connected'|'error'|'disconnected')
+  onRemoteTrack: null,    // (peerId, track, streams)
+  onStatus: null,         // (status)
 
-  // Generate 20-byte peer ID (WebTorrent compatible)
   generatePeerId(name) {
     const rand = Array.from(crypto.getRandomValues(new Uint8Array(6)))
       .map(b => b.toString(16).padStart(2, '0')).join('');
     return `-GL0001-${rand}`;
   },
 
-  // Room name → SHA-1 info_hash (hex)
   async roomToHash(room) {
     const data = new TextEncoder().encode('gridlock:' + room);
     const hash = await crypto.subtle.digest('SHA-1', data);
@@ -42,7 +41,6 @@ const Signal = {
       .map(b => b.toString(16).padStart(2, '0')).join('');
   },
 
-  // Generate WebRTC offers upfront
   async _generateOffers(count) {
     const offers = [];
     for (let i = 0; i < count; i++) {
@@ -50,7 +48,6 @@ const Signal = {
       const dc = pc.createDataChannel('mesh', { ordered: true });
       const offerId = crypto.randomUUID();
 
-      // Wait for ICE gathering to complete
       await new Promise(resolve => {
         pc.onicecandidate = e => { if (!e.candidate) resolve(); };
         pc.createOffer().then(o => pc.setLocalDescription(o));
@@ -67,12 +64,12 @@ const Signal = {
     return offers;
   },
 
-  // Set up handlers for a peer connection
   _setupPeerHandlers(pc, dc, peerId) {
     dc.onopen = () => {
       console.log('[signal] data channel open:', peerId.slice(0, 12));
       this.peers.set(peerId, { pc, dc });
-      if (this.onPeerConnect) this.onPeerConnect(peerId, dc);
+      // Pass pc so peer.js can attach media tracks
+      if (this.onPeerConnect) this.onPeerConnect(peerId, dc, pc);
     };
 
     dc.onclose = () => {
@@ -86,6 +83,12 @@ const Signal = {
       console.warn('[signal] data channel error:', peerId.slice(0, 12), e);
     };
 
+    // Remote media tracks (voice, camera, screen)
+    pc.ontrack = (e) => {
+      console.log('[signal] remote track received:', e.track.kind, 'from', peerId.slice(0, 12));
+      if (this.onRemoteTrack) this.onRemoteTrack(peerId, e.track, e.streams);
+    };
+
     pc.oniceconnectionstatechange = () => {
       if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'disconnected') {
         console.log('[signal] ICE state:', pc.iceConnectionState, peerId.slice(0, 12));
@@ -96,7 +99,6 @@ const Signal = {
     };
   },
 
-  // Handle incoming offer from tracker
   async _handleOffer(msg) {
     const pc = new RTCPeerConnection(ICE_CONFIG);
     const remotePeerId = msg.peer_id;
@@ -106,17 +108,21 @@ const Signal = {
       this._setupPeerHandlers(pc, dc, remotePeerId);
     };
 
+    // Also set up ontrack for incoming offers
+    pc.ontrack = (e) => {
+      console.log('[signal] remote track from offer:', e.track.kind, 'from', remotePeerId.slice(0, 12));
+      if (this.onRemoteTrack) this.onRemoteTrack(remotePeerId, e.track, e.streams);
+    };
+
     await pc.setRemoteDescription(msg.offer);
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
 
-    // Wait for ICE gathering
     await new Promise(resolve => {
       if (pc.iceGatheringState === 'complete') resolve();
       else pc.onicecandidate = e => { if (!e.candidate) resolve(); };
     });
 
-    // Send answer back via tracker
     this.ws.send(JSON.stringify({
       action: 'announce',
       info_hash: this.infoHash,
@@ -129,7 +135,6 @@ const Signal = {
     console.log('[signal] answered offer from:', remotePeerId.slice(0, 12));
   },
 
-  // Handle answer to our offer
   async _handleAnswer(msg) {
     const pending = this.pendingOffers.get(msg.offer_id);
     if (!pending) return;
@@ -137,7 +142,6 @@ const Signal = {
     console.log('[signal] got answer for offer:', msg.offer_id.slice(0, 8));
   },
 
-  // Re-announce to pick up new peers
   async _reannounce() {
     if (!this.active || !this.ws || this.ws.readyState !== WebSocket.OPEN) return;
     console.log('[signal] re-announcing...');
@@ -189,16 +193,12 @@ const Signal = {
       this.ws.onmessage = async (e) => {
         try {
           const msg = JSON.parse(e.data);
-
           if (msg.offer && msg.peer_id !== this.myId) {
             await this._handleOffer(msg);
           }
-
           if (msg.answer && msg.offer_id) {
             await this._handleAnswer(msg);
           }
-
-          // Tracker tells us when to re-announce
           if (msg.interval) {
             if (this.reannounceTimer) clearTimeout(this.reannounceTimer);
             this.reannounceTimer = setTimeout(() => this._reannounce(), msg.interval * 1000);
@@ -217,9 +217,7 @@ const Signal = {
       this.ws.onclose = () => {
         console.log('[signal] tracker disconnected');
         if (this.onStatus) this.onStatus('disconnected');
-        // Auto-reconnect
         if (this.active) {
-          console.log('[signal] reconnecting in', RECONNECT_DELAY, 'ms');
           setTimeout(() => {
             if (this.active) this.join(this.room, '').catch(() => {});
           }, RECONNECT_DELAY);
@@ -228,7 +226,7 @@ const Signal = {
     });
   },
 
-  // Broadcast to all connected peers
+  // Broadcast data to all peers via data channel
   broadcast(data) {
     const json = typeof data === 'string' ? data : JSON.stringify(data);
     let sent = 0;
@@ -241,22 +239,45 @@ const Signal = {
     return sent;
   },
 
-  // Send to specific peer
-  sendTo(peerId, data) {
-    const peer = this.peers.get(peerId);
-    if (peer?.dc.readyState === 'open') {
-      peer.dc.send(typeof data === 'string' ? data : JSON.stringify(data));
-      return true;
-    }
-    return false;
+  // Add a media track to all existing peer connections
+  addTrackToAll(track, stream) {
+    this.peers.forEach(({ pc }, peerId) => {
+      try {
+        pc.addTrack(track, stream);
+        console.log('[signal] added', track.kind, 'track to', peerId.slice(0, 12));
+      } catch (e) {
+        console.warn('[signal] failed to add track to', peerId.slice(0, 12), e.message);
+      }
+    });
   },
 
-  // Get connected peer count
+  // Remove a media track from all peer connections
+  removeTrackFromAll(track) {
+    this.peers.forEach(({ pc }, peerId) => {
+      const sender = pc.getSenders().find(s => s.track === track);
+      if (sender) {
+        try {
+          pc.removeTrack(sender);
+          console.log('[signal] removed', track.kind, 'track from', peerId.slice(0, 12));
+        } catch (e) {
+          console.warn('[signal] failed to remove track from', peerId.slice(0, 12));
+        }
+      }
+    });
+  },
+
+  // Add a media track to a specific peer connection
+  addTrackToPeer(peerId, track, stream) {
+    const peer = this.peers.get(peerId);
+    if (peer) {
+      try { peer.pc.addTrack(track, stream); } catch (e) { /* already added */ }
+    }
+  },
+
   peerCount() {
     return this.peers.size;
   },
 
-  // Cleanup everything
   cleanup() {
     this.active = false;
     if (this.reannounceTimer) {
@@ -268,7 +289,7 @@ const Signal = {
     this.pendingOffers.forEach(({ pc }) => pc.close());
     this.pendingOffers.clear();
     if (this.ws) {
-      this.ws.onclose = null; // prevent auto-reconnect
+      this.ws.onclose = null;
       this.ws.close();
       this.ws = null;
     }

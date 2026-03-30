@@ -1,15 +1,21 @@
-// state.js — CRDT-based shared state via data channels
+// state.js — CRDT shared state (broadcasts via Signal)
 
 const State = {
   state: {},
   vector: {},
-  channels: new Map(),
+  broadcastFn: null, // set by peer.js to Signal.broadcast
   listeners: new Set(),
+
+  init(broadcastFn) {
+    this.broadcastFn = broadcastFn;
+  },
 
   set(key, value, myId) {
     this.vector[myId] = (this.vector[myId] || 0) + 1;
     this.state[key] = { value, clock: { ...this.vector }, by: myId };
-    this.broadcast({ type: 'state_update', key, value, clock: { ...this.vector } }, myId);
+    if (this.broadcastFn) {
+      this.broadcastFn({ type: 'state_update', key, value, clock: { ...this.vector }, from: myId });
+    }
     this._notify(key, value);
   },
 
@@ -27,14 +33,6 @@ const State = {
     }
   },
 
-  broadcast(data, myId) {
-    data.from = myId;
-    const json = JSON.stringify(data);
-    this.channels.forEach(ch => {
-      if (ch.readyState === 'open') ch.send(json);
-    });
-  },
-
   onChange(fn) { this.listeners.add(fn); },
   _notify(key, value) { this.listeners.forEach(fn => fn(key, value)); },
 
@@ -48,16 +46,13 @@ const State = {
     return m;
   },
 
-  registerChannel(peerId, channel) {
-    this.channels.set(peerId, channel);
-  },
-
-  removeChannel(peerId) {
-    this.channels.delete(peerId);
-  },
-
   getFullState() {
     return { ...this.state };
+  },
+
+  clear() {
+    this.state = {};
+    this.vector = {};
   }
 };
 

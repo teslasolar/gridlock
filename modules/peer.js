@@ -418,18 +418,77 @@ function leave() {
   UI.showJoin();
 }
 
-// Initialize UI and wire up join/leave
+const GLOBAL_ROOM = 'lobby';
+
+function generateAnonName() {
+  const adj = ['swift','bright','calm','dark','keen','bold','warm','cool','wild','free'];
+  const noun = ['fox','owl','elk','ray','bee','ant','cat','bat','jay','ram'];
+  return adj[Math.floor(Math.random()*adj.length)] + '-' + noun[Math.floor(Math.random()*noun.length)] + '-' + Math.floor(Math.random()*100);
+}
+
+async function switchRoom(newRoom) {
+  // Leave current room cleanly
+  connections.forEach(({ conn }) => conn.close());
+  connections.clear();
+  knownPeers.clear();
+  Voice.stop();
+  Camera.stop();
+  Screen.stop();
+  Chat.history = [];
+  Chat.channels.clear();
+  State.channels.clear();
+  State.state = {};
+  State.vector = {};
+  ME.peer?.destroy();
+  ME.peer = null;
+
+  UI.peers.clear();
+  document.getElementById('peers-list').innerHTML = '';
+  document.getElementById('camera-grid').innerHTML = '';
+  document.getElementById('chat-messages').innerHTML = '';
+  UI.hideScreen();
+  UI.setMicActive(false);
+  UI.setCamActive(false);
+  UI.setScreenActive(false);
+  UI.updatePeerCount();
+
+  // Join new room
+  await join(ME.name, newRoom);
+}
+
+// Initialize UI and wire up
 UI.init();
-UI.onJoin = join;
-UI.onLeave = leave;
 
-// Restore name from localStorage
-const savedName = localStorage.getItem('gridlock-name');
-if (savedName) document.getElementById('input-name').value = savedName;
-
-// Save name on join
-const origJoin = UI.onJoin;
-UI.onJoin = (name, room) => {
+UI.onJoin = async (name, room) => {
   localStorage.setItem('gridlock-name', name);
-  origJoin(name, room);
+  await join(name, room || GLOBAL_ROOM);
 };
+
+UI.onLeave = () => {
+  // Leave goes back to global lobby, not to join screen
+  switchRoom(GLOBAL_ROOM);
+};
+
+// Room switcher
+document.getElementById('btn-switch-room').onclick = () => {
+  const room = document.getElementById('input-room').value.trim();
+  if (room && room !== ME.room) {
+    switchRoom(room);
+    document.getElementById('input-room').value = '';
+  }
+};
+document.getElementById('input-room').onkeydown = (e) => {
+  if (e.key === 'Enter') document.getElementById('btn-switch-room').click();
+};
+
+// Auto-join: if we have a saved name, skip join screen and go straight to lobby
+const savedName = localStorage.getItem('gridlock-name');
+if (savedName) {
+  // Auto-join global lobby
+  join(savedName, GLOBAL_ROOM);
+} else {
+  // Show name prompt
+  document.getElementById('join-screen').hidden = false;
+  document.getElementById('input-name').value = generateAnonName();
+  document.getElementById('input-name').select();
+}

@@ -22,7 +22,6 @@ const UI = {
       joinScreen: document.getElementById('join-screen'),
       mainUI: document.getElementById('main-ui'),
       inputName: document.getElementById('input-name'),
-      inputRoom: document.getElementById('input-room'),
       btnJoin: document.getElementById('btn-join'),
       btnLeave: document.getElementById('btn-leave'),
       roomLabel: document.getElementById('room-label'),
@@ -57,14 +56,10 @@ const UI = {
   _bindEvents() {
     this.el.btnJoin.onclick = () => {
       const name = this.el.inputName.value.trim();
-      const room = this.el.inputRoom.value.trim();
-      if (name && room && this.onJoin) this.onJoin(name, room);
-    };
-    this.el.inputRoom.onkeydown = (e) => {
-      if (e.key === 'Enter') this.el.btnJoin.click();
+      if (name && this.onJoin) this.onJoin(name);
     };
     this.el.inputName.onkeydown = (e) => {
-      if (e.key === 'Enter') this.el.inputRoom.focus();
+      if (e.key === 'Enter') this.el.btnJoin.click();
     };
     this.el.btnLeave.onclick = () => { if (this.onLeave) this.onLeave(); };
 

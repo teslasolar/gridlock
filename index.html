@@ -10,16 +10,15 @@
 </head>
 <body>
   <div id="app">
-    <!-- JOIN SCREEN -->
-    <div id="join-screen">
+    <!-- JOIN SCREEN (only shown if no saved name) -->
+    <div id="join-screen" hidden>
       <h1>GRIDLOCK</h1>
       <p class="subtitle">P2P Everything. Zero Servers. Zero Cost.</p>
       <div class="join-form">
-        <input type="text" id="input-name" placeholder="your name" autocomplete="off" />
-        <input type="text" id="input-room" placeholder="room name" autocomplete="off" />
-        <button id="btn-join">JOIN ROOM</button>
+        <input type="text" id="input-name" placeholder="pick a name" autocomplete="off" />
+        <button id="btn-join">ENTER</button>
       </div>
-      <p class="hint">room name is the password. share it only with your people.</p>
+      <p class="hint">you'll join the global lobby. switch rooms anytime.</p>
     </div>
 
     <!-- MAIN UI (hidden until joined) -->
@@ -27,7 +26,11 @@
       <header>
         <span id="room-label">GRIDLOCK</span>
         <span id="peer-count">0 peers</span>
-        <button id="btn-leave" title="Leave room">LEAVE</button>
+        <div id="room-switcher">
+          <input type="text" id="input-room" placeholder="room name..." autocomplete="off" />
+          <button id="btn-switch-room" title="Switch room">GO</button>
+        </div>
+        <button id="btn-leave" title="Back to global lobby">LOBBY</button>
       </header>
       <div id="layout">
         <!-- SIDEBAR -->

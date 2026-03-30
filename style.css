@@ -184,6 +184,33 @@ header {
   outline: none;
   margin-top: 0.3rem;
 }
+#bridge-status { font-size: 0.7rem; color: var(--dim); padding: 0.2rem 0; }
+#bridge-status.active { color: var(--green); }
+#bridge-config-area input {
+  font-family: var(--font);
+  font-size: 0.7rem;
+  padding: 0.25rem;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  width: 100%;
+  margin-bottom: 3px;
+  outline: none;
+}
+#btn-bridge-connect, #btn-bridge-disconnect {
+  font-family: var(--font);
+  font-size: 0.7rem;
+  padding: 0.25rem 0.5rem;
+  background: var(--surface);
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  cursor: pointer;
+  margin-top: 0.2rem;
+}
+#btn-bridge-disconnect { color: var(--red); border-color: var(--red); }
+.chat-msg.bridge .name { color: var(--green); }
 #provider-status { font-size: 0.7rem; color: var(--dim); padding: 0.2rem 0; }
 #provider-status.connected { color: var(--green); }
 #provider-select {

@@ -9,6 +9,7 @@ import Files from './files.js';
 import State from './state.js';
 import DB from './db.js';
 import Providers from './providers.js';
+import Bridge from './bridge.js';
 
 console.log('[gridlock] peer.js loaded');
 
@@ -109,6 +110,10 @@ function wireCallbacks() {
   UI._onChatSend = (text) => {
     console.log('[gridlock] sending chat:', text.slice(0, 30));
     Chat.send(text, ME.id, ME.name);
+    // Also relay to bridge if active
+    if (Bridge.active && Bridge.token) {
+      Bridge.post(text, ME.name).catch(() => {});
+    }
   };
 
   UI._onFileShare = async (file) => {
@@ -229,6 +234,25 @@ function wireCallbacks() {
     await Providers.disconnect();
     UI.appendSystemMsg(`disconnected from ${name || 'provider'}`);
     UI.setProviderStatus(null, false);
+  };
+
+  // Bridge (GitHub Issue chat relay)
+  UI._onBridgeConnect = (owner, repo, issueNumber, token) => {
+    Bridge.stop();
+    Bridge.onMessage = (msg) => {
+      // Don't echo back messages we posted ourselves
+      if (msg.text.includes('(via GRIDLOCK)')) return;
+      UI.appendChat(msg);
+    };
+    Bridge.start(owner, repo, issueNumber, token || null);
+    UI.appendSystemMsg(`bridge active: ${owner}/${repo}#${issueNumber} (polling every 5s)`);
+    UI.setBridgeStatus(true);
+  };
+
+  UI._onBridgeDisconnect = () => {
+    Bridge.stop();
+    UI.appendSystemMsg('bridge disconnected');
+    UI.setBridgeStatus(false);
   };
 }
 
@@ -428,6 +452,7 @@ function cleanupRoom() {
   Voice.stop();
   Camera.stop();
   Screen.stop();
+  Bridge.stop();
   Chat.history = [];
   Chat.channels.clear();
   State.channels.clear();

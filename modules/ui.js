@@ -49,6 +49,13 @@ const UI = {
       llmInputArea: document.getElementById('llm-input-area'),
       llmInput: document.getElementById('llm-input'),
       btnLlmAsk: document.getElementById('btn-llm-ask'),
+      bridgeStatus: document.getElementById('bridge-status'),
+      bridgeRepo: document.getElementById('bridge-repo'),
+      bridgeIssue: document.getElementById('bridge-issue'),
+      bridgeToken: document.getElementById('bridge-token'),
+      bridgeConfigArea: document.getElementById('bridge-config-area'),
+      btnBridgeConnect: document.getElementById('btn-bridge-connect'),
+      btnBridgeDisconnect: document.getElementById('btn-bridge-disconnect'),
       providerStatus: document.getElementById('provider-status'),
       providerSelect: document.getElementById('provider-select'),
       providerConfigArea: document.getElementById('provider-config-area'),
@@ -104,6 +111,21 @@ const UI = {
     this.el.fileInput.addEventListener('change', (e) => {
       const file = e.target.files[0];
       if (file && this._onFileShare) this._onFileShare(file);
+    });
+
+    // Bridge UI
+    this.el.btnBridgeConnect.addEventListener('click', () => {
+      const repoStr = this.el.bridgeRepo.value.trim();
+      const issueNum = parseInt(this.el.bridgeIssue.value.trim(), 10);
+      const token = this.el.bridgeToken.value.trim() || null;
+      if (!repoStr || !issueNum) return;
+      const [owner, repo] = repoStr.split('/');
+      if (owner && repo && this._onBridgeConnect) {
+        this._onBridgeConnect(owner, repo, issueNum, token);
+      }
+    });
+    this.el.btnBridgeDisconnect.addEventListener('click', () => {
+      if (this._onBridgeDisconnect) this._onBridgeDisconnect();
     });
 
     this.el.btnLlmLoad.addEventListener('click', () => this._loadLLM());
@@ -206,9 +228,10 @@ const UI = {
 
   appendChat(msg) {
     const div = document.createElement('div');
-    div.className = 'chat-msg';
+    div.className = msg.bridge ? 'chat-msg bridge' : 'chat-msg';
     const time = new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    div.innerHTML = `<span class="name">${this._esc(msg.name)}</span>: <span class="text">${this._esc(msg.text)}</span><span class="time">${time}</span>`;
+    const prefix = msg.bridge ? '[gh] ' : '';
+    div.innerHTML = `${prefix}<span class="name">${this._esc(msg.name)}</span>: <span class="text">${this._esc(msg.text)}</span><span class="time">${time}</span>`;
     this.el.chatMessages.appendChild(div);
     this.el.chatMessages.scrollTop = this.el.chatMessages.scrollHeight;
   },
@@ -228,6 +251,13 @@ const UI = {
     this.el.btnProviderDisconnect.hidden = !connected;
     this.el.providerConfigArea.hidden = connected;
     this.el.providerSelect.disabled = connected;
+  },
+
+  setBridgeStatus(active) {
+    this.el.bridgeStatus.textContent = active ? 'polling...' : 'off';
+    this.el.bridgeStatus.className = active ? 'active' : '';
+    this.el.btnBridgeDisconnect.hidden = !active;
+    this.el.bridgeConfigArea.hidden = active;
   },
 
   showScreen(peerId, stream) {
@@ -310,6 +340,8 @@ const UI = {
   _onFileDownload: null,
   _onProviderConnect: null,
   _onProviderDisconnect: null,
+  _onBridgeConnect: null,
+  _onBridgeDisconnect: null,
 };
 
 export default UI;

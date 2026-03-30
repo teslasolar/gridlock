@@ -57,6 +57,17 @@
               <button id="btn-llm-ask">ask</button>
             </div>
           </section>
+          <section id="bridge-panel">
+            <h3>CHAT BRIDGE</h3>
+            <div id="bridge-status">off</div>
+            <div id="bridge-config-area">
+              <input type="text" id="bridge-repo" placeholder="owner/repo" value="teslasolar/gridlock" />
+              <input type="text" id="bridge-issue" placeholder="issue #" value="1" />
+              <input type="text" id="bridge-token" placeholder="gh token (optional)" />
+              <button id="btn-bridge-connect">connect</button>
+            </div>
+            <button id="btn-bridge-disconnect" hidden>disconnect</button>
+          </section>
           <section id="provider-panel">
             <h3>DB PROVIDER</h3>
             <div id="provider-status">none</div>
